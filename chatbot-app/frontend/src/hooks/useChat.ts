@@ -8,6 +8,10 @@ import { getApiUrl } from '@/config/environment'
 import API_CONFIG from '@/config/api'
 
 
+interface UseChatProps {
+  onSessionCreated?: () => void  // Callback when new session is created
+}
+
 interface UseChatReturn {
   messages: Message[]
   groupedMessages: Array<{
@@ -26,18 +30,21 @@ interface UseChatReturn {
   showProgressPanel: boolean
   toggleProgressPanel: () => void
   sendMessage: (e: React.FormEvent, files?: File[]) => Promise<void>
-  clearChat: () => Promise<void>
+  newChat: () => Promise<void>
   toggleTool: (toolId: string) => Promise<void>
   refreshTools: () => Promise<void>
   sessionId: string | null
+  loadSession: (sessionId: string) => Promise<void>
+  onGatewayToolsChange: (enabledToolIds: string[]) => void
 }
 
-export const useChat = (): UseChatReturn => {
+export const useChat = (props?: UseChatProps): UseChatReturn => {
   const [messages, setMessages] = useState<Message[]>([])
   const [inputMessage, setInputMessage] = useState('')
   const [backendUrl, setBackendUrl] = useState('http://localhost:8000')
   const [availableTools, setAvailableTools] = useState<Tool[]>([])
-  
+  const [gatewayToolIds, setGatewayToolIds] = useState<string[]>([])  // Gateway tool IDs from frontend
+
   const [sessionState, setSessionState] = useState<ChatSessionState>({
     reasoning: null,
     streaming: null,
@@ -123,15 +130,28 @@ export const useChat = (): UseChatReturn => {
     availableTools
   })
 
+  // Callback when new session is created
+  const handleSessionCreated = useCallback(() => {
+    console.log('[useChat] New session created, refreshing session list');
+    // Call window refresh function if available
+    if (typeof (window as any).__refreshSessionList === 'function') {
+      (window as any).__refreshSessionList();
+    }
+    // Also call prop callback if provided
+    props?.onSessionCreated?.();
+  }, [props]);
+
   // Initialize chat API hook
-  const { loadTools, toggleTool: apiToggleTool, clearChat: apiClearChat, sendMessage: apiSendMessage, cleanup, sessionId } = useChatAPI({
+  const { loadTools, toggleTool: apiToggleTool, newChat: apiNewChat, sendMessage: apiSendMessage, cleanup, sessionId, loadSession } = useChatAPI({
     backendUrl,
     setUIState,
     setMessages,
     availableTools,
     setAvailableTools,
     handleStreamEvent,
-    handleLegacyEvent
+    handleLegacyEvent,
+    gatewayToolIds,
+    onSessionCreated: handleSessionCreated
   })
 
   // Function to clear stored progress events
@@ -170,6 +190,25 @@ export const useChat = (): UseChatReturn => {
     }
   }, [uiState.isConnected, clearProgressEvents])
 
+  // Restore last session on page load
+  useEffect(() => {
+    const lastSessionId = sessionStorage.getItem('chat-session-id')
+
+    if (lastSessionId) {
+      console.log(`[useChat] Restoring last session: ${lastSessionId}`)
+
+      loadSession(lastSessionId).catch(error => {
+        console.error('[useChat] Failed to restore session:', error)
+        // Load failed, clear sessionStorage
+        sessionStorage.removeItem('chat-session-id')
+        setMessages([])
+      })
+    } else {
+      console.log('[useChat] No last session, starting with empty state')
+      setMessages([])
+    }
+  }, []) // Empty dependency - run once on mount
+
   // Wrapper functions to maintain the same interface
   const toggleTool = useCallback(async (toolId: string) => {
     await apiToggleTool(toolId)
@@ -179,13 +218,15 @@ export const useChat = (): UseChatReturn => {
     await loadTools()
   }, [])
 
-  const clearChat = useCallback(async () => {
-    const success = await apiClearChat()
+  const newChat = useCallback(async () => {
+    const success = await apiNewChat()
     if (success) {
       setSessionState({ reasoning: null, streaming: null, toolExecutions: [], toolProgress: [] })
       setUIState(prev => ({ ...prev, isTyping: false }))
+      // Clear messages to start fresh
+      setMessages([])
     }
-  }, [apiClearChat])
+  }, [apiNewChat, setMessages])
 
   const sendMessage = useCallback(async (e: React.FormEvent, files?: File[]) => {
     e.preventDefault()
@@ -283,6 +324,11 @@ export const useChat = (): UseChatReturn => {
     setUIState(prev => ({ ...prev, showProgressPanel: !prev.showProgressPanel }))
   }, [])
 
+  // Handler for Gateway tool changes
+  const handleGatewayToolsChange = useCallback((enabledToolIds: string[]) => {
+    setGatewayToolIds(enabledToolIds);
+  }, []);
+
   // Cleanup on unmount
   useEffect(() => {
     return cleanup
@@ -302,9 +348,11 @@ export const useChat = (): UseChatReturn => {
     showProgressPanel: uiState.showProgressPanel,
     toggleProgressPanel,
     sendMessage,
-    clearChat,
+    newChat,
     toggleTool,
     refreshTools,
-    sessionId
+    sessionId,
+    loadSession,
+    onGatewayToolsChange: handleGatewayToolsChange
   }
 }

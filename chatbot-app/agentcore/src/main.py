@@ -18,6 +18,7 @@ if str(src_path) not in sys.path:
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 import logging
 import os
 
@@ -35,12 +36,29 @@ app = FastAPI(
     description="Agent execution and tool orchestration service"
 )
 
+# Add CORS middleware for local development
+# In production (AWS), CloudFront handles routing so CORS is not needed
+if os.getenv('ENVIRONMENT', 'development') == 'development':
+    logger.info("Adding CORS middleware for local development")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://localhost:3000",  # Frontend dev server
+            "http://localhost:3001",
+            "http://127.0.0.1:3000",
+        ],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
 # Import routers
-from routers import health, chat
+from routers import health, chat, gateway_tools
 
 # Include routers
 app.include_router(health.router)
 app.include_router(chat.router)
+app.include_router(gateway_tools.router)
 
 # Mount static file directories for serving generated content
 # These are created by tools (visualization, code interpreter, etc.)

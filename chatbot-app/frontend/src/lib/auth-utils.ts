@@ -53,12 +53,13 @@ export function extractUserFromRequest(request: Request): CognitoUser {
 /**
  * Generate or extract session ID from request headers
  * Session ID must be >= 33 characters to meet AgentCore Runtime validation
+ * Returns: { sessionId: string, isNew: boolean }
  */
-export function getSessionId(request: Request, userId: string): string {
+export function getSessionId(request: Request, userId: string): { sessionId: string; isNew: boolean } {
   // Check for existing session ID in header
   const headerSessionId = request.headers.get('X-Session-ID')
   if (headerSessionId) {
-    return headerSessionId
+    return { sessionId: headerSessionId, isNew: false }
   }
 
   // Generate new session ID >= 33 characters
@@ -72,5 +73,5 @@ export function getSessionId(request: Request, userId: string): string {
 
   console.log(`[Auth] Generated session ID: ${sessionId} (length: ${sessionId.length})`)
 
-  return sessionId
+  return { sessionId, isNew: true }
 }

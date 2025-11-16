@@ -44,6 +44,24 @@ echo "🌍 Deployment region: $AWS_REGION"
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 echo "Deploying to AWS Account: $ACCOUNT_ID in region: $AWS_REGION"
 
+# Check if DynamoDB tables already exist
+echo "🔍 Checking for existing DynamoDB tables..."
+USERS_TABLE_EXISTS=$(aws dynamodb describe-table --table-name strands-agent-chatbot-users --region $AWS_REGION 2>/dev/null && echo "true" || echo "false")
+SESSIONS_TABLE_EXISTS=$(aws dynamodb describe-table --table-name strands-agent-chatbot-sessions --region $AWS_REGION 2>/dev/null && echo "true" || echo "false")
+
+if [ "$USERS_TABLE_EXISTS" = "true" ] && [ "$SESSIONS_TABLE_EXISTS" = "true" ]; then
+    echo "✅ Existing DynamoDB tables found - will import them"
+    export USE_EXISTING_TABLES=true
+elif [ "$USERS_TABLE_EXISTS" = "true" ] || [ "$SESSIONS_TABLE_EXISTS" = "true" ]; then
+    echo "⚠️  Only some DynamoDB tables exist - deployment may fail"
+    echo "   Users table: $USERS_TABLE_EXISTS"
+    echo "   Sessions table: $SESSIONS_TABLE_EXISTS"
+    export USE_EXISTING_TABLES=false
+else
+    echo "📝 No existing DynamoDB tables found - will create new ones"
+    export USE_EXISTING_TABLES=false
+fi
+
 # Install dependencies
 echo "Installing CDK dependencies..."
 npm install
@@ -153,9 +171,10 @@ echo "  - Leave empty for development mode (allows all origins)"
 echo ""
 
 # Check if CORS origins are already set via environment variable
-if [ -z "$CORS_ORIGINS" ]; then
+# Use ${CORS_ORIGINS+x} to check if variable is defined (even if empty)
+if [ -z "${CORS_ORIGINS+x}" ]; then
     read -p "Enter allowed CORS origins (comma-separated, include protocol) [leave empty for dev mode]: " cors_input
-    
+
     if [ -z "$cors_input" ]; then
         export CORS_ORIGINS=""
         echo "Development mode - all origins allowed (not recommended for production)"
@@ -165,7 +184,11 @@ if [ -z "$CORS_ORIGINS" ]; then
         echo "These domains will be allowed for both API access and iframe embedding"
     fi
 else
-    echo "Using configured CORS origins: $CORS_ORIGINS"
+    if [ -z "$CORS_ORIGINS" ]; then
+        echo "Using configured CORS origins: (empty - development mode)"
+    else
+        echo "Using configured CORS origins: $CORS_ORIGINS"
+    fi
 fi
 
 # Collect IP ranges for CIDR-based access control (if not using Cognito)

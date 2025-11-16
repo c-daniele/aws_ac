@@ -5,55 +5,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { extractUserFromRequest } from '@/lib/auth-utils'
 import { getUserEnabledTools as getDynamoUserEnabledTools, getUserProfile, upsertUserProfile } from '@/lib/dynamodb-client'
+import toolsConfig from '@/config/tools-config.json'
 
 // Check if running in local development mode
 const IS_LOCAL = process.env.NEXT_PUBLIC_AGENTCORE_LOCAL === 'true'
 
 export const runtime = 'nodejs'
-
-// All available tools (default catalog)
-const ALL_TOOLS = [
-  {
-    id: 'calculator',
-    name: 'Calculator',
-    description: 'Perform mathematical operations',
-    category: 'utilities',
-    type: 'local_tools',
-    tool_type: 'local'
-  },
-  {
-    id: 'get_current_weather',
-    name: 'Weather Lookup',
-    description: 'Get current weather information for any US location',
-    category: 'utilities',
-    type: 'local_tools',
-    tool_type: 'local'
-  },
-  {
-    id: 'create_visualization',
-    name: 'Visualization Creator',
-    description: 'Create interactive charts and visualizations from data',
-    category: 'visualization',
-    type: 'local_tools',
-    tool_type: 'local'
-  },
-  {
-    id: 'ddg_web_search',
-    name: 'Web Search',
-    description: 'Search the web using DuckDuckGo for information and research',
-    category: 'search',
-    type: 'local_tools',
-    tool_type: 'local'
-  },
-  {
-    id: 'fetch_url_content',
-    name: 'URL Fetcher',
-    description: 'Fetch and extract text content from web pages',
-    category: 'web',
-    type: 'local_tools',
-    tool_type: 'local'
-  }
-]
 
 export async function GET(request: NextRequest) {
   try {
@@ -98,30 +55,67 @@ export async function GET(request: NextRequest) {
       console.log(`[API] Loaded anonymous user from local file: ${enabledToolIds.length} enabled`)
     }
 
-    // Map tools with user-specific enabled state
-    const toolsWithUserState = ALL_TOOLS.map(tool => ({
-      ...tool,
+    // Get local tools from config and map with user-specific enabled state
+    const localTools = (toolsConfig.local_tools || []).map((tool: any) => ({
+      id: tool.id,
+      name: tool.name,
+      description: tool.description,
+      category: tool.category,
+      type: 'local_tools',
+      tool_type: 'local',
       enabled: enabledToolIds.includes(tool.id)
     }))
+
+    // Get gateway tools from config and map with user-specific enabled state
+    const gatewayTargets = toolsConfig.gateway_targets || []
+    const gatewayTools = gatewayTargets.flatMap((target: any) =>
+      target.tools.map((tool: any) => ({
+        id: tool.id,
+        name: tool.name,
+        description: tool.description,
+        category: target.category,
+        type: 'gateway',
+        tool_type: 'gateway',
+        enabled: enabledToolIds.includes(tool.id)
+      }))
+    )
 
     console.log(`[API] Returning tools for user ${userId} - ${enabledToolIds.length} enabled`)
 
     return NextResponse.json({
-      tools: toolsWithUserState,
-      mcp_servers: []
+      tools: localTools,
+      mcp_servers: gatewayTools
     })
   } catch (error) {
     console.error('[API] Error loading tools:', error)
 
-    // Fallback: return all tools as enabled on error
-    const toolsWithDefaultState = ALL_TOOLS.map(tool => ({
-      ...tool,
-      enabled: true
+    // Fallback: return all tools from config with default enabled state
+    const localTools = (toolsConfig.local_tools || []).map((tool: any) => ({
+      id: tool.id,
+      name: tool.name,
+      description: tool.description,
+      category: tool.category,
+      type: 'local_tools',
+      tool_type: 'local',
+      enabled: tool.enabled ?? true
     }))
 
+    const gatewayTargets = toolsConfig.gateway_targets || []
+    const gatewayTools = gatewayTargets.flatMap((target: any) =>
+      target.tools.map((tool: any) => ({
+        id: tool.id,
+        name: tool.name,
+        description: tool.description,
+        category: target.category,
+        type: 'gateway',
+        tool_type: 'gateway',
+        enabled: target.enabled ?? false
+      }))
+    )
+
     return NextResponse.json({
-      tools: toolsWithDefaultState,
-      mcp_servers: []
+      tools: localTools,
+      mcp_servers: gatewayTools
     })
   }
 }

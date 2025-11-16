@@ -6,7 +6,9 @@
     "dev": "NODE_NO_WARNINGS=1 next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "type-check": "tsc --noEmit",
+    "verify": "bash verify-build.sh"
   },
   "dependencies": {
     "@aws-amplify/ui-react": "^6.0.0",
@@ -42,12 +44,14 @@
     "remark-gfm": "^4.0.1",
     "swr": "^2.3.4",
     "tailwind-merge": "^2.0.0",
-    "tailwindcss-animate": "^1.0.7"
+    "tailwindcss-animate": "^1.0.7",
+    "uuid": "^13.0.0"
   },
   "devDependencies": {
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",
+    "@types/uuid": "^10.0.0",
     "autoprefixer": "^10.0.1",
     "eslint": "^8",
     "eslint-config-next": "15.4.3",

@@ -15,8 +15,57 @@ export const maxDuration = 1800 // 30 minutes for long-running agent tasks (self
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json()
-    const { message, model_id, enabled_tools } = body
+    // Check if request is FormData (file upload) or JSON (text only)
+    const contentType = request.headers.get('content-type') || ''
+    const isFormData = contentType.includes('multipart/form-data')
+
+    let message: string
+    let model_id: string | undefined
+    let enabled_tools: string[] | undefined
+    let files: File[] | undefined
+
+    if (isFormData) {
+      // Parse FormData for file uploads
+      const formData = await request.formData()
+      message = formData.get('message') as string
+      model_id = formData.get('model_id') as string | undefined
+
+      const enabledToolsJson = formData.get('enabled_tools') as string | null
+      if (enabledToolsJson) {
+        enabled_tools = JSON.parse(enabledToolsJson)
+      }
+
+      // Extract and convert files to AgentCore format
+      const uploadedFiles: File[] = []
+      for (const [key, value] of formData.entries()) {
+        if (key === 'files' && value instanceof File) {
+          uploadedFiles.push(value)
+        }
+      }
+
+      // Convert File objects to AgentCore format
+      if (uploadedFiles.length > 0) {
+        files = await Promise.all(
+          uploadedFiles.map(async (file) => {
+            const buffer = await file.arrayBuffer()
+            const base64 = Buffer.from(buffer).toString('base64')
+
+            return {
+              filename: file.name,
+              content_type: file.type || 'application/octet-stream',
+              bytes: base64
+            } as any // Type assertion to avoid AgentCore File type conflict
+          })
+        )
+        console.log(`[BFF] Converted ${files.length} file(s) to AgentCore format`)
+      }
+    } else {
+      // Parse JSON for text-only messages
+      const body = await request.json()
+      message = body.message
+      model_id = body.model_id
+      enabled_tools = body.enabled_tools
+    }
 
     if (!message) {
       return new Response(
@@ -30,64 +79,97 @@ export async function POST(request: NextRequest) {
     const userId = user.userId
 
     // Get or generate session ID (user-specific)
-    const sessionId = getSessionId(request, userId)
+    const { sessionId, isNew: isNewSession } = getSessionId(request, userId)
 
-    console.log(`[BFF] Chat request - User: ${userId} (${user.email || 'no email'}), Session: ${sessionId}`)
-    console.log(`[BFF] Message: ${message.substring(0, 50)}...`)
+    console.log(`[BFF] User: ${userId}, Session: ${sessionId}${isNewSession ? ' (new)' : ''}`)
+
+    // If new session, create session metadata
+    if (isNewSession) {
+      const now = new Date().toISOString()
+      const sessionData = {
+        title: message.length > 50 ? message.substring(0, 47) + '...' : message,
+        messageCount: 0,
+        lastMessageAt: now,
+        status: 'active' as const,
+        starred: false,
+        tags: [],
+      }
+
+      // Create session in storage
+      if (userId === 'anonymous') {
+        if (IS_LOCAL) {
+          const { upsertSession } = await import('@/lib/local-session-store')
+          upsertSession(userId, sessionId, sessionData)
+        }
+      } else {
+        if (IS_LOCAL) {
+          const { upsertSession } = await import('@/lib/local-session-store')
+          upsertSession(userId, sessionId, sessionData)
+        } else {
+          const { upsertSession: upsertDynamoSession } = await import('@/lib/dynamodb-client')
+          await upsertDynamoSession(userId, sessionId, sessionData)
+        }
+      }
+    }
 
     // Load or use provided enabled_tools
     let enabledToolsList: string[] = []
 
     if (enabled_tools && Array.isArray(enabled_tools)) {
-      // Frontend provided enabled_tools - use them
       enabledToolsList = enabled_tools
-      console.log(`[BFF] Using enabled_tools from request (${enabledToolsList.length}):`, enabledToolsList)
-    } else {
-      // No enabled_tools in request - load from storage
-      if (userId !== 'anonymous') {
-        if (IS_LOCAL) {
-          const { getUserEnabledTools } = await import('@/lib/local-tool-store')
-          enabledToolsList = getUserEnabledTools(userId)
-          console.log(`[BFF] Loaded enabled_tools from local store (${enabledToolsList.length})`)
-        } else {
-          const { getUserEnabledTools } = await import('@/lib/dynamodb-client')
-          enabledToolsList = await getUserEnabledTools(userId)
-          console.log(`[BFF] Loaded enabled_tools from DynamoDB (${enabledToolsList.length})`)
-        }
+    } else if (userId !== 'anonymous') {
+      if (IS_LOCAL) {
+        const { getUserEnabledTools } = await import('@/lib/local-tool-store')
+        enabledToolsList = getUserEnabledTools(userId)
       } else {
-        console.log('[BFF] Anonymous user - all tools enabled by default')
+        const { getUserEnabledTools } = await import('@/lib/dynamodb-client')
+        enabledToolsList = await getUserEnabledTools(userId)
       }
     }
 
     // Load model configuration from storage
+    const defaultModelId = model_id || 'us.anthropic.claude-haiku-4-5-20251001-v1:0'
     let modelConfig = {
-      model_id: model_id || 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+      model_id: defaultModelId,
       temperature: 0.7,
-      system_prompt: 'You are a helpful AI assistant.',
-      caching_enabled: true
+      system_prompt: `You are an intelligent AI agent with dynamic tool capabilities. You can perform various tasks based on the combination of tools available to you.
+
+Key guidelines:
+- You can ONLY use tools that are explicitly provided to you in each conversation
+- Available tools may change throughout the conversation based on user preferences
+- When multiple tools are available, select and use the most appropriate combination in the optimal order to fulfill the user's request
+- Break down complex tasks into steps and use multiple tools sequentially or in parallel as needed
+- Always explain your reasoning when using tools
+- If you don't have the right tool for a task, clearly inform the user about the limitation
+
+Your goal is to be helpful, accurate, and efficient in completing user requests using the available tools.`,
+      caching_enabled: defaultModelId.toLowerCase().includes('claude') || defaultModelId.toLowerCase().includes('nova')
     }
 
     if (userId !== 'anonymous') {
       if (IS_LOCAL) {
-        // Local: Load from file (create local-model-store if needed)
         try {
           const { getUserModelConfig } = await import('@/lib/local-tool-store')
           const config = getUserModelConfig(userId)
           if (config) {
             modelConfig = { ...modelConfig, ...config }
-            console.log(`[BFF] Loaded model config from local file store:`, modelConfig)
+            // Auto-enable caching for Claude and Nova models
+            if (config.model_id) {
+              modelConfig.caching_enabled = config.model_id.toLowerCase().includes('claude') || config.model_id.toLowerCase().includes('nova')
+            }
           }
         } catch (error) {
-          console.log('[BFF] Local model config not available, using defaults')
+          // Use defaults
         }
       } else {
-        // AWS: Load from DynamoDB
         try {
           const { getUserProfile } = await import('@/lib/dynamodb-client')
           const profile = await getUserProfile(userId)
           if (profile?.preferences) {
             if (profile.preferences.defaultModel) {
               modelConfig.model_id = profile.preferences.defaultModel
+              // Auto-enable caching for Claude and Nova models
+              modelConfig.caching_enabled = profile.preferences.defaultModel.toLowerCase().includes('claude') || profile.preferences.defaultModel.toLowerCase().includes('nova')
             }
             if (profile.preferences.defaultTemperature !== undefined) {
               modelConfig.temperature = profile.preferences.defaultTemperature
@@ -95,17 +177,11 @@ export async function POST(request: NextRequest) {
             if (profile.preferences.systemPrompt) {
               modelConfig.system_prompt = profile.preferences.systemPrompt
             }
-            if (profile.preferences.cachingEnabled !== undefined) {
-              modelConfig.caching_enabled = profile.preferences.cachingEnabled
-            }
-            console.log(`[BFF] Loaded model config from DynamoDB:`, modelConfig)
           }
         } catch (error) {
-          console.log('[BFF] DynamoDB model config not available, using defaults')
+          // Use defaults
         }
       }
-    } else {
-      console.log('[BFF] Anonymous user - using default model config')
     }
 
     // Create a custom stream that:
@@ -121,25 +197,20 @@ export async function POST(request: NextRequest) {
 
         // Send initial keep-alive immediately to establish connection
         controller.enqueue(encoder.encode(`: connected ${new Date().toISOString()}\n\n`))
-        console.log('[BFF] Connection established, starting keep-alive')
 
         // Start keep-alive interval (runs every 20 seconds)
         keepAliveInterval = setInterval(() => {
           const now = Date.now()
           const timeSinceActivity = now - lastActivityTime
 
-          // Send keep-alive if no data in last 20 seconds
           if (timeSinceActivity >= 20000) {
-            const keepAlive = `: keep-alive ${new Date().toISOString()}\n\n`
-            controller.enqueue(encoder.encode(keepAlive))
-            console.log('[BFF] Sent keep-alive (waiting for AgentCore or during processing)')
+            controller.enqueue(encoder.encode(`: keep-alive ${new Date().toISOString()}\n\n`))
             lastActivityTime = now
           }
-        }, 20000) // Check every 20 seconds
+        }, 20000)
 
         try {
           // Execute before hooks (session metadata, tool config, etc.)
-          console.log('[BFF] Executing before hooks...')
           const hookManager = createDefaultHookManager()
           await hookManager.executeBeforeHooks({
             userId,
@@ -149,24 +220,18 @@ export async function POST(request: NextRequest) {
             enabledTools: enabledToolsList,
           })
 
-          // Invoke AgentCore Runtime with user's enabled tools and model config
-          console.log('[BFF] Invoking AgentCore Runtime...')
-          console.log('[BFF] Model config:', modelConfig)
-          console.log('[BFF] Enabled tools:', enabledToolsList)
-
           const agentStream = await invokeAgentCoreRuntime(
             userId,
             sessionId,
             message,
             modelConfig.model_id,
             enabledToolsList.length > 0 ? enabledToolsList : undefined,
-            undefined, // files
+            files, // Pass uploaded files to AgentCore
             modelConfig.temperature,
             modelConfig.system_prompt,
             modelConfig.caching_enabled
           )
           agentStarted = true
-          console.log('[BFF] AgentCore stream started')
 
           // Read from AgentCore stream and forward chunks
           const reader = agentStream.getReader()
@@ -174,18 +239,14 @@ export async function POST(request: NextRequest) {
           while (true) {
             const { done, value } = await reader.read()
 
-            if (done) {
-              console.log('[BFF] AgentCore stream completed')
-              break
-            }
+            if (done) break
 
-            // Forward chunk from AgentCore
             controller.enqueue(value)
             lastActivityTime = Date.now()
           }
 
         } catch (error) {
-          console.error('[BFF] Error during AgentCore streaming:', error)
+          console.error('[BFF] Error:', error)
           const errorEvent = `data: ${JSON.stringify({
             type: 'error',
             content: error instanceof Error ? error.message : 'Unknown error',
@@ -193,10 +254,51 @@ export async function POST(request: NextRequest) {
           })}\n\n`
           controller.enqueue(encoder.encode(errorEvent))
         } finally {
-          // Clean up keep-alive interval
+          // Update session metadata after message processing
+          try {
+            let currentSession: any = null
+            if (userId === 'anonymous') {
+              if (IS_LOCAL) {
+                const { getSession } = await import('@/lib/local-session-store')
+                currentSession = getSession(userId, sessionId)
+              }
+            } else {
+              if (IS_LOCAL) {
+                const { getSession } = await import('@/lib/local-session-store')
+                currentSession = getSession(userId, sessionId)
+              } else {
+                const { getSession: getDynamoSession } = await import('@/lib/dynamodb-client')
+                currentSession = await getDynamoSession(userId, sessionId)
+              }
+            }
+
+            if (currentSession) {
+              const updates: any = {
+                lastMessageAt: new Date().toISOString(),
+                messageCount: (currentSession.messageCount || 0) + 1,
+              }
+
+              if (userId === 'anonymous') {
+                if (IS_LOCAL) {
+                  const { updateSession } = await import('@/lib/local-session-store')
+                  updateSession(userId, sessionId, updates)
+                }
+              } else {
+                if (IS_LOCAL) {
+                  const { updateSession } = await import('@/lib/local-session-store')
+                  updateSession(userId, sessionId, updates)
+                } else {
+                  const { updateSession: updateDynamoSession } = await import('@/lib/dynamodb-client')
+                  await updateDynamoSession(userId, sessionId, updates)
+                }
+              }
+            }
+          } catch (updateError) {
+            console.error('[BFF] Session update error:', updateError)
+          }
+
           if (keepAliveInterval) {
             clearInterval(keepAliveInterval)
-            console.log('[BFF] Keep-alive interval cleared')
           }
           controller.close()
         }
@@ -209,6 +311,7 @@ export async function POST(request: NextRequest) {
       'Cache-Control': 'no-cache, no-transform',
       'X-Accel-Buffering': 'no',
       'X-Session-ID': sessionId,
+      'X-Session-Is-New': isNewSession ? 'true' : 'false',
       'Connection': 'keep-alive'
     })
 

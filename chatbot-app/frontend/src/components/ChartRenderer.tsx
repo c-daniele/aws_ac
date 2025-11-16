@@ -1,8 +1,7 @@
 "use client";
 
-import React, { useRef, useState, useEffect } from "react";
+import React, { useRef, useState } from "react";
 import html2canvas from 'html2canvas';
-import { getApiUrl } from '@/config/environment';
 import {
   Card,
   CardContent,
@@ -460,160 +459,20 @@ function DownloadButton({ chartRef, title }: { chartRef: React.RefObject<HTMLDiv
 }
 
 interface ChartRendererProps {
-  chartId?: string;
-  sessionId?: string;
-  toolUseId?: string;
-  chartData?: any;
+  chartData: any;
 }
 
-// Chart data cache to avoid repeated API calls
-const chartCache = new Map<string, ChartData>();
-
-// Global loading state to prevent duplicate requests for the same chart
-const loadingCharts = new Set<string>();
-
-// Global promise cache to share loading promises between components
-const loadingPromises = new Map<string, Promise<ChartData>>();
-
 // Memoized component to prevent unnecessary re-renders
-export const ChartRenderer = React.memo<ChartRendererProps>(({ chartId, sessionId, toolUseId, chartData: providedChartData }) => {
+export const ChartRenderer = React.memo<ChartRendererProps>(({ chartData }) => {
   const chartRef = useRef<HTMLDivElement>(null);
-  const [chartData, setChartData] = useState<ChartData | null>(() => {
-    // If chartData is provided directly, use it
-    if (providedChartData) {
-      return providedChartData;
-    }
-    // Otherwise, initialize with cached data if available
-    return chartId ? chartCache.get(chartId) || null : null;
-  });
-  const [loading, setLoading] = useState(() => {
-    // If chartData is provided directly, no loading needed
-    if (providedChartData) return false;
-    // Otherwise, check if we need to load from cache
-    return chartId ? !chartCache.has(chartId) : false;
-  });
-  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    // If chartData is provided directly, use it and skip loading
-    if (providedChartData) {
-      setChartData(providedChartData);
-      setLoading(false);
-      return;
-    }
-
-    // If no chartId, can't load data
-    if (!chartId) {
-      setError('No chart data or chart ID provided');
-      setLoading(false);
-      return;
-    }
-
-    // Skip loading if data is already cached
-    if (chartCache.has(chartId)) {
-      setChartData(chartCache.get(chartId)!);
-      setLoading(false);
-      return;
-    }
-
-    // If already loading, wait for the existing promise
-    if (loadingPromises.has(chartId)) {
-      loadingPromises.get(chartId)!
-        .then((data) => {
-          setChartData(data);
-          setLoading(false);
-        })
-        .catch((err) => {
-          setError(err instanceof Error ? err.message : 'An unknown error occurred');
-          setLoading(false);
-        });
-      return;
-    }
-
-    // Create and cache the loading promise
-    const loadChartData = async (): Promise<ChartData> => {
-      try {
-        // Request chart data from backend via Next.js proxy
-        // Include sessionId and toolUseId if available
-        const queryParams = new URLSearchParams();
-        if (sessionId) queryParams.append('session_id', sessionId);
-        if (toolUseId) queryParams.append('tool_use_id', toolUseId);
-        
-        const url = getApiUrl(`charts/${chartId}.json?${queryParams.toString()}`);
-        
-        const headers: Record<string, string> = {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json',
-        };
-        
-        // Also include sessionId in headers as fallback
-        if (sessionId) {
-          headers['X-Session-ID'] = sessionId;
-        }
-        
-        const response = await fetch(url, { headers });
-        if (!response.ok) {
-          throw new Error(`Failed to load chart data: ${response.status} ${response.statusText}`);
-        }
-        
-        // Get response text first to debug JSON parsing issues
-        const responseText = await response.text();
-        
-        try {
-          const data = JSON.parse(responseText);
-          
-          // Cache the data
-          chartCache.set(chartId, data);
-          return data;
-        } catch (jsonError) {
-          console.error('JSON parsing error for chart:', chartId);
-          console.error('Response text:', responseText.substring(0, 500) + (responseText.length > 500 ? '...' : ''));
-          console.error('JSON error:', jsonError);
-          const errorMessage = jsonError instanceof Error ? jsonError.message : 'Unknown JSON parsing error';
-          throw new Error(`Invalid JSON response for chart ${chartId}: ${errorMessage}. Response preview: ${responseText.substring(0, 100)}...`);
-        }
-      } finally {
-        // Clean up loading state
-        loadingCharts.delete(chartId);
-        loadingPromises.delete(chartId);
-      }
-    };
-
-    // Only start loading if not already in progress
-    if (!loadingCharts.has(chartId)) {
-      loadingCharts.add(chartId);
-      const promise = loadChartData();
-      loadingPromises.set(chartId, promise);
-      
-      promise
-        .then((data) => {
-          setChartData(data);
-          setLoading(false);
-        })
-        .catch((err) => {
-          setError(err instanceof Error ? err.message : 'An unknown error occurred');
-          setLoading(false);
-        });
-    }
-  }, [chartId, sessionId, toolUseId, providedChartData]);
-
-  if (loading) {
+  if (!chartData) {
     return (
       <div className="flex items-center justify-center p-8">
-        <div className="text-sm text-muted-foreground">Loading chart...</div>
+        <div className="text-sm text-red-600">No chart data provided</div>
       </div>
     );
   }
-
-  if (error) {
-    return (
-      <div className="flex items-center justify-center p-8">
-        <div className="text-sm text-red-600">Error: {error}</div>
-      </div>
-    );
-  }
-
-  if (!chartData) return null;
 
   const chartTitleToUse = chartData.config?.title || "Chart";
   
@@ -640,11 +499,11 @@ export const ChartRenderer = React.memo<ChartRendererProps>(({ chartId, sessionI
                 </tr>
               </thead>
               <tbody>
-                {chartData.data.map((item, idx) => (
+                {chartData.data.map((item: any, idx: number) => (
                   <tr key={idx} className={idx % 2 === 0 ? 'chart-data-table-row-even' : 'chart-data-table-row-odd'}>
                     {Object.entries(item).map(([key, value]) => (
                       <td key={key} className="chart-data-table-cell">
-                        {typeof value === 'number' 
+                        {typeof value === 'number'
                           ? new Intl.NumberFormat().format(value)
                           : String(value)}
                       </td>

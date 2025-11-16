@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Settings, Trash2, TestTube, CheckCircle, XCircle, Server } from 'lucide-react';
-import { getApiUrl } from '@/config/environment';
+import { apiPost } from '@/lib/api-client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from './ui/label';
@@ -151,15 +151,7 @@ export function EditMcpServerDialog({
         headers: {}
       };
 
-      const response = await fetch(getApiUrl('mcp/servers/test'), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(testConfig),
-      });
-
-      const result = await response.json();
+      const result = await apiPost('mcp/servers/test', testConfig);
       setTestResult(result);
     } catch (error) {
       setTestResult({

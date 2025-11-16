@@ -215,3 +215,83 @@ export function clearUserSessions(userId: string): void {
   saveSessionStore(store)
   console.log(`[LocalSessionStore] Cleared all sessions for user ${userId}`)
 }
+
+/**
+ * Get conversation messages for a session from AgentCore Runtime storage
+ * This reads directly from the agentcore sessions directory
+ */
+export function getSessionMessages(sessionId: string): any[] {
+  try {
+    // Path to AgentCore Runtime storage
+    const agentcoreSessionsDir = path.join(process.cwd(), '..', 'agentcore', 'sessions')
+    const sessionDir = path.join(agentcoreSessionsDir, `session_${sessionId}`)
+    const messagesDir = path.join(sessionDir, 'agents', 'agent_default', 'messages')
+
+    if (!fs.existsSync(messagesDir)) {
+      console.log(`[LocalSessionStore] No messages directory found: ${messagesDir}`)
+      return []
+    }
+
+    // Read all message files
+    const messageFiles = fs.readdirSync(messagesDir)
+      .filter(f => f.startsWith('message_') && f.endsWith('.json'))
+      .sort((a, b) => {
+        const numA = parseInt(a.match(/message_(\d+)\.json/)?.[1] || '0')
+        const numB = parseInt(b.match(/message_(\d+)\.json/)?.[1] || '0')
+        return numA - numB
+      })
+
+    console.log(`[LocalSessionStore] Found ${messageFiles.length} message files in ${messagesDir}`)
+
+    const messages = messageFiles.map((filename, index) => {
+      const filePath = path.join(messagesDir, filename)
+      const content = fs.readFileSync(filePath, 'utf-8')
+      const messageData = JSON.parse(content)
+
+      // Extract text and tool information from content array
+      let text = ''
+      let toolUse = null
+      let toolResult = null
+
+      messageData.message.content.forEach((c: any) => {
+        if (c.text) {
+          text += c.text
+        } else if (c.toolUse) {
+          toolUse = {
+            toolUseId: c.toolUse.toolUseId,
+            name: c.toolUse.name,
+            input: c.toolUse.input,
+          }
+        } else if (c.toolResult) {
+          toolResult = {
+            toolUseId: c.toolResult.toolUseId,
+            content: c.toolResult.content,
+            status: c.toolResult.status,
+          }
+        }
+      })
+
+      const message = {
+        id: `msg-${sessionId}-${index}`,
+        role: messageData.message.role.toLowerCase(), // "user" | "assistant"
+        content: text,
+        timestamp: messageData.created_at || new Date().toISOString(),
+        ...(toolUse ? { toolUse } : {}),
+        ...(toolResult ? { toolResult } : {}),
+      }
+
+      // Debug log
+      if (toolUse || toolResult) {
+        console.log(`[LocalSessionStore] Message ${index} has tool info:`, { toolUse, toolResult })
+      }
+
+      return message
+    })
+
+    console.log(`[LocalSessionStore] Loaded ${messages.length} messages`)
+    return messages
+  } catch (error) {
+    console.error('[LocalSessionStore] Failed to load session messages:', error)
+    return []
+  }
+}

@@ -237,6 +237,21 @@ destroy_mcp_servers() {
         cd ..
     fi
 
+    # AgentCore Gateway Stack (Lambda MCP Tools)
+    if [ -d "agentcore-gateway-stack" ]; then
+        log_step "Destroying AgentCore Gateway Stack..."
+        cd agentcore-gateway-stack/scripts
+
+        if [ -f "destroy.sh" ]; then
+            chmod +x destroy.sh
+            echo "yes" | ./destroy.sh
+        else
+            log_warn "agentcore-gateway-stack/scripts/destroy.sh not found"
+        fi
+
+        cd ../..
+    fi
+
     log_info "MCP Servers destroyed!"
     echo ""
 }

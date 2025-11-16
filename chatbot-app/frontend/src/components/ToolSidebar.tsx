@@ -1,12 +1,12 @@
 'use client';
 
-import React, { useState, useMemo, useEffect } from 'react';
-import { Settings, Wrench, Server, Trash2, Brain, Moon, Sun, MessageSquare, Plus } from 'lucide-react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import { Settings, Wrench, Server, Brain, Moon, Sun, MessageSquare, Plus, Trash2, Globe } from 'lucide-react';
 import { Tool } from '@/types/chat';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
-import { getApiUrl } from '@/config/environment';
 import { useTheme } from 'next-themes';
+import { apiGet, apiPost, apiPut } from '@/lib/api-client';
 import {
   Sidebar,
   SidebarContent,
@@ -22,13 +22,17 @@ import {
 import { AddMcpServerDialog } from './AddMcpServerDialog';
 import { EditMcpServerDialog } from './EditMcpServerDialog';
 import { ModelConfigDialog } from './ModelConfigDialog';
+import { useGatewayTools } from '@/hooks/useGatewayTools';
 
 interface ToolSidebarProps {
   availableTools: Tool[];
   onToggleTool: (toolId: string) => void;
-  onClearChat: () => void;
+  onNewChat: () => void;
   refreshTools: () => Promise<void>;
   sessionId: string | null;
+  loadSession?: (sessionId: string) => Promise<void>;
+  onSessionListRefresh?: () => void;
+  onGatewayToolsChange?: (enabledToolIds: string[]) => void;  // Callback for Gateway tool changes
 }
 
 interface ChatSession {
@@ -66,40 +70,64 @@ interface CustomTool {
   icon: string;
 }
 
-export function ToolSidebar({ availableTools, onToggleTool, onClearChat, refreshTools, sessionId }: ToolSidebarProps) {
+export function ToolSidebar({ availableTools, onToggleTool, onNewChat, refreshTools, sessionId, loadSession, onSessionListRefresh, onGatewayToolsChange }: ToolSidebarProps) {
   const { setOpenMobile } = useSidebar();
   const { theme, setTheme } = useTheme();
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
   const [isLoadingSessions, setIsLoadingSessions] = useState(false);
 
-  // Load chat sessions
+  // AgentCore Gateway MCP Servers management
+  const { gatewayTargets, isLoading: isLoadingGateway, refreshGatewayStatus, toggleGatewayTarget, getEnabledToolIds } = useGatewayTools();
+
+  // Notify parent about Gateway tool changes
   useEffect(() => {
-    const loadSessions = async () => {
-      setIsLoadingSessions(true);
-      try {
-        const response = await fetch(getApiUrl('session/list?limit=20&status=active'), {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(sessionId ? { 'X-Session-ID': sessionId } : {}),
-          },
-        });
+    if (onGatewayToolsChange) {
+      const enabledIds = getEnabledToolIds();
+      onGatewayToolsChange(enabledIds);
+    }
+  }, [gatewayTargets, onGatewayToolsChange, getEnabledToolIds]);
 
-        if (response.ok) {
-          const data = await response.json();
-          if (data.success && data.sessions) {
-            setChatSessions(data.sessions);
-          }
+  // Load chat sessions function
+  const loadSessions = useCallback(async () => {
+    setIsLoadingSessions(true);
+    try {
+      const data = await apiGet<{ success: boolean; sessions: ChatSession[] }>(
+        'session/list?limit=20&status=active',
+        {
+          headers: sessionId ? { 'X-Session-ID': sessionId } : {},
         }
-      } catch (error) {
-        console.error('Failed to load chat sessions:', error);
-      } finally {
-        setIsLoadingSessions(false);
-      }
-    };
+      );
 
-    loadSessions();
+      if (data.success && data.sessions) {
+        console.log('[ToolSidebar] Loaded sessions:', data.sessions);
+        setChatSessions(data.sessions);
+      }
+    } catch (error) {
+      console.error('[ToolSidebar] Failed to load chat sessions:', error);
+    } finally {
+      setIsLoadingSessions(false);
+    }
   }, [sessionId]);
+
+  // Load chat sessions on mount and when sessionId changes
+  useEffect(() => {
+    loadSessions();
+  }, [loadSessions]);
+
+  // Expose loadSessions to parent via callback
+  useEffect(() => {
+    if (onSessionListRefresh) {
+      onSessionListRefresh();
+    }
+  }, []);
+
+  // Provide refresh function to parent
+  useEffect(() => {
+    (window as any).__refreshSessionList = loadSessions;
+    return () => {
+      delete (window as any).__refreshSessionList;
+    };
+  }, [loadSessions]);
 
   // Extract MCP servers from availableTools
   const mcpServers = useMemo(() => {
@@ -169,25 +197,17 @@ export function ToolSidebar({ availableTools, onToggleTool, onClearChat, refresh
 
   const updateMcpServer = async (serverId: string, serverConfig: any) => {
     try {
-      const response = await fetch(getApiUrl(`mcp/servers/${serverId}/update`), {
-        method: 'POST',
+      const result = await apiPost(`mcp/servers/${serverId}/update`, serverConfig, {
         headers: {
-          'Content-Type': 'application/json',
           'X-Session-ID': sessionId || '',
         },
-        body: JSON.stringify(serverConfig),
       });
 
-      if (!response.ok) {
-        throw new Error(`Failed to update MCP server: ${response.statusText}`);
-      }
-
-      const result = await response.json();
       console.log('MCP server updated successfully:', result);
-      
+
       // Refresh tools to reflect the changes
       await refreshTools();
-      
+
       return result;
     } catch (error) {
       console.error('Error updating MCP server:', error);
@@ -198,22 +218,14 @@ export function ToolSidebar({ availableTools, onToggleTool, onClearChat, refresh
   // Add MCP server to session configuration
   const addMcpServer = async (serverConfig: any) => {
     try {
-      const response = await fetch(getApiUrl('tools/mcp'), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(sessionId ? { 'X-Session-ID': sessionId } : {}),
-        },
-        body: JSON.stringify(serverConfig),
-      });
+      const result = await apiPost<{ success: boolean; message?: string }>(
+        'tools/mcp',
+        serverConfig,
+        {
+          headers: sessionId ? { 'X-Session-ID': sessionId } : {},
+        }
+      );
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Failed to add MCP server');
-      }
-
-      const result = await response.json();
-      
       if (result.success) {
         console.log(`✅ MCP server '${serverConfig.name}' added successfully`);
         // Refresh tools to show the new server
@@ -248,60 +260,84 @@ export function ToolSidebar({ availableTools, onToggleTool, onClearChat, refresh
     return date.toLocaleDateString();
   };
 
+  const deleteSession = async (sessionIdToDelete: string, e: React.MouseEvent) => {
+    // Prevent the click from triggering the session load
+    e.stopPropagation();
+
+    console.log('[ToolSidebar] Deleting session:', sessionIdToDelete);
+
+    try {
+      const response = await fetch(`/api/session/delete?session_id=${sessionIdToDelete}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(sessionId && { 'X-Session-ID': sessionId })
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to delete session: ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      if (data.success) {
+        console.log('[ToolSidebar] Session deleted successfully');
+
+        // Refresh session list
+        await loadSessions();
+
+        // If deleted session was the active one, start new chat
+        if (sessionIdToDelete === sessionId) {
+          onNewChat();
+        }
+      } else {
+        throw new Error(data.error || 'Failed to delete session');
+      }
+    } catch (error) {
+      console.error('[ToolSidebar] Failed to delete session:', error);
+      alert('Failed to delete session. Please try again.');
+    }
+  };
+
   return (
     <Sidebar side="left" className="group-data-[side=left]:border-r-0 bg-sidebar-background border-sidebar-border text-sidebar-foreground flex flex-col h-full">
-      {/* Header */}
-      <SidebarHeader className="flex-shrink-0 border-b border-sidebar-border/50">
-        <SidebarMenu>
-          <div className="flex flex-row justify-between items-center">
-            <div className="flex items-center gap-2">
-              <Settings className="h-5 w-5 text-sidebar-foreground" />
-              <span className="text-lg font-semibold text-sidebar-foreground">Chatbot</span>
+        {/* Header */}
+        <SidebarHeader className="flex-shrink-0 border-b border-sidebar-border/50">
+          <SidebarMenu>
+            <div className="flex flex-row justify-between items-center">
+              <div className="flex items-center gap-2">
+                <Settings className="h-5 w-5 text-sidebar-foreground" />
+                <span className="text-lg font-semibold text-sidebar-foreground">Chatbot</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+                  className="h-8 w-8 p-0 relative"
+                >
+                  <Sun className="h-4 w-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
+                  <Moon className="absolute h-4 w-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
+                  <span className="sr-only">Toggle theme</span>
+                </Button>
+                <ModelConfigDialog sessionId={sessionId} />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={onNewChat}
+                  className="h-8 w-8 p-0"
+                  title="New chat"
+                >
+                  <Plus className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
-            <div className="flex items-center gap-1">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-                className="h-8 w-8 p-0 relative"
-              >
-                <Sun className="h-4 w-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
-                <Moon className="absolute h-4 w-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
-                <span className="sr-only">Toggle theme</span>
-              </Button>
-              <ModelConfigDialog sessionId={sessionId} />
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={onClearChat}
-                className="h-8 w-8 p-0"
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
-        </SidebarMenu>
-      </SidebarHeader>
+          </SidebarMenu>
+        </SidebarHeader>
 
-      {/* Chat Sessions Section - Top */}
-      <div className="flex-1 min-h-0 flex flex-col border-b-2 border-sidebar-border/80">
-        <div className="flex-shrink-0 px-4 py-3 border-b border-sidebar-border/50 bg-sidebar-accent/20">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <MessageSquare className="h-4 w-4 text-sidebar-foreground" />
-              <span className="text-sm font-semibold text-sidebar-foreground">Chat History</span>
-            </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onClearChat}
-              className="h-7 w-7 p-0 hover:bg-sidebar-accent"
-              title="New chat"
-            >
-              <Plus className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
+      {/* Chat Sessions Section - Top (1/3) */}
+      <div className="flex-[1] min-h-0 flex flex-col border-b-2 border-sidebar-border/80">
         <div className="flex-1 overflow-y-auto">
           <SidebarMenu className="p-2">
             {isLoadingSessions ? (
@@ -310,8 +346,20 @@ export function ToolSidebar({ availableTools, onToggleTool, onClearChat, refresh
               </div>
             ) : chatSessions.length > 0 ? (
               chatSessions.map((session) => (
-                <SidebarMenuItem key={session.sessionId}>
-                  <div className="group flex items-start gap-2 p-2.5 rounded-lg hover:bg-sidebar-accent transition-colors cursor-pointer">
+                <SidebarMenuItem key={session.sessionId} className="group">
+                  <div
+                    className={`flex items-start gap-2 p-2.5 rounded-lg hover:bg-sidebar-accent transition-colors cursor-pointer relative ${
+                      session.sessionId === sessionId ? 'bg-sidebar-accent/50 ring-1 ring-primary/20' : ''
+                    }`}
+                    onClick={() => {
+                      console.log('[ToolSidebar] Session clicked:', session.sessionId);
+                      if (loadSession) {
+                        loadSession(session.sessionId);
+                      } else {
+                        console.error('[ToolSidebar] loadSession function is not provided');
+                      }
+                    }}
+                  >
                     <MessageSquare className="h-4 w-4 mt-0.5 text-sidebar-foreground/60 flex-shrink-0" />
                     <div className="flex-1 min-w-0">
                       <div className="font-medium text-sm text-sidebar-foreground truncate">
@@ -327,6 +375,14 @@ export function ToolSidebar({ availableTools, onToggleTool, onClearChat, refresh
                         </span>
                       </div>
                     </div>
+                    {/* Delete button - shows on hover */}
+                    <button
+                      onClick={(e) => deleteSession(session.sessionId, e)}
+                      className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded hover:bg-destructive/10 text-sidebar-foreground/60 hover:text-destructive flex-shrink-0"
+                      title="Delete session"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
                   </div>
                 </SidebarMenuItem>
               ))
@@ -341,8 +397,8 @@ export function ToolSidebar({ availableTools, onToggleTool, onClearChat, refresh
         </div>
       </div>
 
-      {/* Tools Section - Bottom */}
-      <div className="flex-1 min-h-0 flex flex-col">
+      {/* Tools Section - Bottom (2/3) */}
+      <div className="flex-[2] min-h-0 flex flex-col">
         <div className="flex-shrink-0 px-4 py-3 border-b border-sidebar-border/50 bg-sidebar-accent/20">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -522,6 +578,88 @@ export function ToolSidebar({ availableTools, onToggleTool, onClearChat, refresh
                 </SidebarGroupContent>
               </SidebarGroup>
             )}
+
+            {/* AgentCore Gateway MCP Servers */}
+            <SidebarGroup>
+              <SidebarGroupLabel>
+                <div className="flex items-center justify-between w-full">
+                  <div className="flex items-center">
+                    <Globe className="h-4 w-4 mr-2" />
+                    AgentCore Gateway MCP Servers
+                  </div>
+                  {gatewayTargets.length > 0 && (
+                    <button
+                      onClick={() => {
+                        const allEnabled = gatewayTargets.every(t => t.enabled);
+                        gatewayTargets.forEach(t => {
+                          if (t.enabled === allEnabled) {
+                            toggleGatewayTarget(t.id);
+                          }
+                        });
+                      }}
+                      className="text-xs px-2 py-0.5 rounded hover:bg-sidebar-accent transition-colors"
+                    >
+                      {gatewayTargets.every(t => t.enabled) ? 'Disable All' : 'Enable All'}
+                    </button>
+                  )}
+                </div>
+              </SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {isLoadingGateway ? (
+                    <div className="text-center py-4 text-sidebar-foreground/60">
+                      <p className="text-xs">Checking Gateway...</p>
+                    </div>
+                  ) : gatewayTargets.length > 0 ? (
+                    gatewayTargets.map((target) => (
+                      <SidebarMenuItem key={target.id}>
+                        <div className="flex items-center justify-between p-2 rounded-md hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors duration-150">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-base">{target.icon}</span>
+                              <div className="flex-1 min-w-0">
+                                <div className="font-medium text-sm text-sidebar-foreground truncate">
+                                  {target.name}
+                                </div>
+                                <div className="text-xs text-sidebar-foreground/70 truncate">
+                                  {target.description}
+                                </div>
+                                <div className="text-xs mt-1">
+                                  {target.available === true && (
+                                    <span className="text-green-600">● Available ({target.tools.length} tools)</span>
+                                  )}
+                                  {target.available === false && (
+                                    <span className="text-red-600">● Unavailable</span>
+                                  )}
+                                  {target.available === undefined && (
+                                    <span className="text-gray-500">● Checking...</span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                          <Switch
+                            checked={target.enabled}
+                            disabled={target.available === false}
+                            onCheckedChange={() => {
+                              toggleGatewayTarget(target.id)
+                              const enabledIds = gatewayTargets.filter(t => t.enabled || t.id === target.id).map(t => t.id)
+                              onGatewayToolsChange?.(enabledIds)
+                            }}
+                            className="ml-2 flex-shrink-0"
+                          />
+                        </div>
+                      </SidebarMenuItem>
+                    ))
+                  ) : (
+                    <div className="text-center py-4 text-sidebar-foreground/60">
+                      <Globe className="h-6 w-6 mx-auto mb-2 opacity-50" />
+                      <p className="text-xs">No Gateway tools configured</p>
+                    </div>
+                  )}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
 
             {/* MCP Servers */}
             <SidebarGroup>

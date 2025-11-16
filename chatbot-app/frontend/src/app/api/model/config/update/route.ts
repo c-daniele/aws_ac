@@ -17,15 +17,14 @@ export async function POST(request: NextRequest) {
     const userId = user.userId
 
     const body = await request.json()
-    const { model_id, temperature, caching } = body
+    const { model_id, temperature } = body
 
     if (userId === 'anonymous') {
       // Anonymous user - save to local file storage (works for both local and AWS)
       const { updateUserModelConfig } = await import('@/lib/local-tool-store')
       updateUserModelConfig(userId, {
         model_id,
-        temperature,
-        caching_enabled: caching?.enabled
+        temperature
       })
       console.log(`[API] Updated model config for anonymous user via local file: ${model_id}, temp: ${temperature}`)
 
@@ -41,8 +40,7 @@ export async function POST(request: NextRequest) {
       const { updateUserModelConfig } = await import('@/lib/local-tool-store')
       updateUserModelConfig(userId, {
         model_id,
-        temperature,
-        caching_enabled: caching?.enabled
+        temperature
       })
       console.log(`[API] Updated model config for user ${userId} via local file: ${model_id}, temp: ${temperature}`)
     } else {
@@ -52,8 +50,7 @@ export async function POST(request: NextRequest) {
       await upsertUserProfile(userId, user.email || '', user.username, {
         ...(profile?.preferences || {}),
         defaultModel: model_id,
-        defaultTemperature: temperature,
-        cachingEnabled: caching?.enabled
+        defaultTemperature: temperature
       })
 
       console.log(`[API] Updated model config for user ${userId} via DynamoDB: ${model_id}, temp: ${temperature}`)

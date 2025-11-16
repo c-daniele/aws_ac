@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Sparkles, Loader2 } from 'lucide-react';
-import API_CONFIG from '@/config/api';
+import { apiPost } from '@/lib/api-client';
 
 interface SuggestedQuestion {
   id: string;
@@ -37,24 +37,18 @@ export function SuggestedQuestions({ onQuestionSubmit, enabledTools }: Suggested
     }
     
     try {
-      const response = await fetch(`${API_CONFIG.BASE_URL}/chat/suggestions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
+      const data = await apiPost<{ questions: SuggestedQuestion[] }>(
+        'chat/suggestions',
+        {
           available_tools: enabledTools,
           conversation_history: ""
-        })
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data.questions && Array.isArray(data.questions)) {
-          setQuestions(data.questions);
-        } else {
-          throw new Error('Invalid response format');
         }
+      );
+
+      if (data.questions && Array.isArray(data.questions)) {
+        setQuestions(data.questions);
       } else {
-        throw new Error('Failed to generate questions');
+        throw new Error('Invalid response format');
       }
     } catch (error) {
       setQuestions([

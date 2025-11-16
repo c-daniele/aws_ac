@@ -466,10 +466,15 @@ main() {
     echo ""
     print_warning "This deployment will create the following components:"
     echo "  ✅ Web Application (Chatbot) with Cognito Authentication"
-    echo "  ✅ Serverless MCP Servers (Lambda-based tools)"
-    echo "  ⏭️  Shared Infrastructure (DISABLED - Stateful MCP disabled)"
-    echo "  ⏭️  Fargate MCP Servers (DISABLED - Stateful MCP disabled)"
+    echo "  ✅ AgentCore Gateway Stack (Gateway + 5 Lambda MCP functions)"
     echo "  ✅ VPC, security groups, and networking"
+    echo ""
+    print_status "Gateway will provide 12 MCP tools:"
+    echo "  • tavily_search, tavily_extract"
+    echo "  • wikipedia_search, wikipedia_get_article"
+    echo "  • arxiv_search, arxiv_get_paper"
+    echo "  • google_web_search, google_image_search"
+    echo "  • stock_quote, stock_history, financial_news, stock_analysis"
     echo ""
 
     print_status "Starting deployment in dependency order..."
@@ -492,71 +497,34 @@ main() {
         sleep 30
     fi
 
-    # Step 2: Deploy Serverless MCP Servers (independent of VPC)
-    print_status "🚀 Step 2: Deploying Serverless MCP Servers..."
-    if ! deploy_component "Serverless MCP Servers" \
-        "serverless-mcp-farm/deploy-server.sh" \
+    # Step 2: Deploy AgentCore Gateway Stack (MCP tools via Gateway + Lambda)
+    print_status "🚀 Step 2: Deploying AgentCore Gateway Stack..."
+    if ! deploy_component "AgentCore Gateway Stack" \
+        "agentcore-gateway-stack/scripts/deploy.sh" \
         "" \
         "" \
-        ""; then
-        print_warning "Some serverless MCP servers failed to deploy, continuing..."
+        "strands-agent-chatbot-GatewayStack"; then
+        print_warning "AgentCore Gateway Stack failed to deploy, continuing..."
     fi
 
-    # Step 3: Deploy Shared Infrastructure (uses VPC from Step 1)
-    # DISABLED: Stateful MCP servers (Fargate) are disabled
-    # print_status "🚀 Step 3: Deploying Shared Infrastructure..."
-    # if ! deploy_component "Shared Infrastructure" \
-    #     "fargate-mcp-farm/shared-infrastructure/deploy.sh" \
-    #     "fargate-mcp-farm/shared-infrastructure/cdk" \
-    #     "true" \
-    #     "McpFarmAlbStack"; then
-    #     print_warning "Shared Infrastructure failed to deploy. Fargate MCP servers will be skipped."
-    #     SKIP_FARGATE=true
-    # fi
-    print_status "⏭️  Step 3: Skipping Shared Infrastructure (Stateful MCP disabled)"
-    SKIP_FARGATE=true
+    # Step 3: Configure Gateway URL for Runtime
+    print_status "🔗 Step 3: Configuring Gateway URL for Runtime..."
 
-    # Step 4: Deploy Fargate MCP Servers (depend on shared ALB and VPC)
-    # DISABLED: Stateful MCP servers (Fargate) are disabled
-    # if [ "$SKIP_FARGATE" != "true" ]; then
-    #     print_status "🚀 Step 4: Deploying Fargate MCP Servers..."
-    #
-    #     # Deploy Python MCP Server
-    #     if ! deploy_component "Python MCP Server" \
-    #         "fargate-mcp-farm/python-mcp/deploy.sh" \
-    #         "fargate-mcp-farm/python-mcp/cdk" \
-    #         "true" \
-    #         "python-mcp-fargate"; then
-    #         print_warning "Python MCP Server failed to deploy, continuing..."
-    #     fi
-    #
-    #     # Deploy Nova Act MCP Server
-    #     if ! deploy_component "Nova Act MCP Server" \
-    #         "fargate-mcp-farm/nova-act-mcp/deploy.sh" \
-    #         "fargate-mcp-farm/nova-act-mcp/cdk" \
-    #         "true" \
-    #         "nova-act-mcp-fargate"; then
-    #         print_warning "Nova Act MCP Server failed to deploy, continuing..."
-    #     fi
-    # else
-    #     print_warning "Skipping Fargate MCP servers due to shared infrastructure failure"
-    # fi
-    print_status "⏭️  Step 4: Skipping Fargate MCP Servers (Stateful MCP disabled)"
+    # Get Gateway URL from SSM Parameter Store
+    GATEWAY_URL=$(aws ssm get-parameter \
+        --name "/strands-agent-chatbot/dev/mcp/gateway-url" \
+        --query 'Parameter.Value' \
+        --output text \
+        --region $AWS_REGION 2>/dev/null || echo "")
 
-    # Step 4.5: Deploy AgentCore MCP Servers
-    print_status "🚀 Step 4.5: Deploying AgentCore MCP Servers..."
-    if ! deploy_component "AgentCore MCP Servers" \
-        "agentcore-mcp-farm/deploy-all.sh" \
-        "" \
-        "" \
-        ""; then
-        print_warning "Some AgentCore MCP servers failed to deploy, continuing..."
+    if [ -n "$GATEWAY_URL" ]; then
+        print_success "Gateway URL: $GATEWAY_URL"
+        print_status "Gateway URL is available for AgentCore Runtime integration"
+    else
+        print_warning "Gateway URL not found. Please check Gateway deployment."
     fi
 
-    # Step 5: Configure MCP endpoints
-    configure_mcp_endpoints
-
-    # Step 6: Display deployment results
+    # Step 4: Display deployment results
     print_status "📋 Deployment Summary"
     echo "======================================"
 
@@ -577,24 +545,33 @@ main() {
     print_success "✅ Web Application: $chatbot_url"
     print_success "🔐 Cognito Login: $cognito_url"
 
-    # List deployed MCP servers
-    print_status "🔧 Deployed MCP Servers:"
+    # List deployed Gateway tools
+    print_status "🔧 Deployed MCP Tools (via AgentCore Gateway):"
 
-    # Check serverless MCPs
-    for server in aws-documentation aws-pricing bedrock-kb-retrieval tavily-web-search financial-market recruiter-insights; do
-        local stack_name=$(get_stack_name "$server")
-        if aws cloudformation describe-stacks --stack-name "$stack_name" --region $AWS_REGION &>/dev/null; then
-            echo "  ✅ $server (Serverless)"
+    # Get Gateway information
+    local gateway_id=$(aws ssm get-parameter \
+        --name "/strands-agent-chatbot/dev/mcp/gateway-id" \
+        --query 'Parameter.Value' \
+        --output text \
+        --region $AWS_REGION 2>/dev/null || echo "")
+
+    if [ -n "$gateway_id" ]; then
+        # List Gateway Targets
+        local targets=$(aws bedrock-agentcore list-gateway-targets \
+            --gateway-identifier "$gateway_id" \
+            --region $AWS_REGION \
+            --query 'gatewayTargets[*].name' \
+            --output text 2>/dev/null || echo "")
+
+        if [ -n "$targets" ]; then
+            for target in $targets; do
+                echo "  ✅ $target (Gateway Tool)"
+            done
+        else
+            print_warning "No Gateway targets found"
         fi
-    done
-
-    # Check Fargate MCPs
-    if aws cloudformation describe-stacks --stack-name "python-mcp-fargate" --region $AWS_REGION &>/dev/null; then
-        echo "  ✅ python-mcp (Fargate)"
-    fi
-
-    if aws cloudformation describe-stacks --stack-name "nova-act-mcp-fargate" --region $AWS_REGION &>/dev/null; then
-        echo "  ✅ nova-act-mcp (Fargate)"
+    else
+        print_warning "Gateway ID not found"
     fi
 
     echo ""

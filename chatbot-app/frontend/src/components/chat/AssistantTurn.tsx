@@ -26,8 +26,8 @@ export const AssistantTurn: React.FC<AssistantTurnProps> = ({ messages, currentR
   // Sort messages by timestamp to maintain chronological order
   const sortedMessages = [...messages].sort((a, b) => {
     // Extract timestamp for comparison - use id as fallback since it's based on Date.now()
-    const timeA = a.timestamp ? new Date(a.timestamp).getTime() : a.id
-    const timeB = b.timestamp ? new Date(b.timestamp).getTime() : b.id
+    const timeA = a.timestamp ? new Date(a.timestamp).getTime() : (typeof a.id === 'number' ? a.id : 0)
+    const timeB = b.timestamp ? new Date(b.timestamp).getTime() : (typeof b.id === 'number' ? b.id : 0)
     return timeA - timeB
   })
 
@@ -61,7 +61,10 @@ export const AssistantTurn: React.FC<AssistantTurnProps> = ({ messages, currentR
   }
 
   sortedMessages.forEach((message) => {
-    if (message.isToolMessage) {
+    // Check if message is a tool message
+    const isToolMsg = message.isToolMessage
+
+    if (isToolMsg) {
       // Flush any accumulated text before adding tool message
       flushTextGroup()
       groupedContent.push({
@@ -72,7 +75,7 @@ export const AssistantTurn: React.FC<AssistantTurnProps> = ({ messages, currentR
     } else if (message.text) {
       // Accumulate text messages
       if (!currentTextGroup) {
-        textGroupStartId = message.id
+        textGroupStartId = typeof message.id === 'number' ? message.id : 0
       }
       currentTextGroup += message.text
       if (message.images && message.images.length > 0) {

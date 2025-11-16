@@ -61,10 +61,7 @@ export const sessionMetadataHook: ChatHook = {
   name: 'session-metadata',
   async execute(context: ChatHookContext): Promise<HookResult> {
     try {
-      console.log(`[Hook:${this.name}] Upserting session metadata for ${context.sessionId}`)
-
       if (IS_LOCAL) {
-        // Local: Use file-based session store
         const { upsertSession, getSession } = await import('@/lib/local-session-store')
         const existingSession = getSession(context.userId, context.sessionId)
 
@@ -73,10 +70,7 @@ export const sessionMetadataHook: ChatHook = {
           lastMessageAt: new Date().toISOString(),
           messageCount: (existingSession?.messageCount || 0) + 1,
         })
-
-        console.log(`[Hook:${this.name}] ✅ Local session metadata upserted (count: ${(existingSession?.messageCount || 0) + 1})`)
       } else {
-        // AWS: Use DynamoDB
         const { upsertSession, getSession } = await import('@/lib/dynamodb-client')
         const existingSession = await getSession(context.userId, context.sessionId)
 
@@ -85,13 +79,10 @@ export const sessionMetadataHook: ChatHook = {
           lastMessageAt: new Date().toISOString(),
           messageCount: (existingSession?.messageCount || 0) + 1,
         })
-
-        console.log(`[Hook:${this.name}] ✅ DynamoDB session metadata upserted (count: ${(existingSession?.messageCount || 0) + 1})`)
       }
 
       return { success: true }
     } catch (error) {
-      console.error(`[Hook:${this.name}] ❌ Failed:`, error)
       return {
         success: false,
         error: error instanceof Error ? error : new Error(String(error))
@@ -108,35 +99,25 @@ export const toolConfigurationHook: ChatHook = {
   name: 'tool-configuration',
   async execute(context: ChatHookContext): Promise<HookResult> {
     try {
-      // Only save if tools were explicitly provided in request
       if (!context.enabledTools || context.enabledTools.length === 0) {
-        console.log(`[Hook:${this.name}] ⏭️  No tools to save, skipping`)
         return { success: true }
       }
 
-      console.log(`[Hook:${this.name}] Saving enabled tools: ${context.enabledTools.length} tools`)
-
       if (context.userId === 'anonymous') {
-        // Anonymous user - save to local file storage
         const { updateUserEnabledTools } = await import('@/lib/local-tool-store')
         updateUserEnabledTools(context.userId, context.enabledTools)
-        console.log(`[Hook:${this.name}] ✅ Anonymous user tools saved to local file`)
       } else {
-        // Authenticated user
         if (IS_LOCAL) {
           const { updateUserEnabledTools } = await import('@/lib/local-tool-store')
           updateUserEnabledTools(context.userId, context.enabledTools)
-          console.log(`[Hook:${this.name}] ✅ User tools saved to local file`)
         } else {
           const { updateUserEnabledTools } = await import('@/lib/dynamodb-client')
           await updateUserEnabledTools(context.userId, context.enabledTools)
-          console.log(`[Hook:${this.name}] ✅ User tools saved to DynamoDB`)
         }
       }
 
       return { success: true }
     } catch (error) {
-      console.error(`[Hook:${this.name}] ❌ Failed:`, error)
       return {
         success: false,
         error: error instanceof Error ? error : new Error(String(error))
@@ -154,11 +135,8 @@ export const modelConfigurationHook: ChatHook = {
   async execute(context: ChatHookContext): Promise<HookResult> {
     try {
       // TODO: Implement model config saving if needed
-      // For now, this is a placeholder for future model preference persistence
-      console.log(`[Hook:${this.name}] ⏭️  Skipping (not implemented)`)
       return { success: true }
     } catch (error) {
-      console.error(`[Hook:${this.name}] ❌ Failed:`, error)
       return {
         success: false,
         error: error instanceof Error ? error : new Error(String(error))
@@ -175,55 +153,30 @@ export class ChatHookManager {
   private beforeHooks: ChatHook[] = []
   private afterHooks: ChatHook[] = []
 
-  /**
-   * Register a hook to run before AgentCore invocation
-   */
   registerBeforeHook(hook: ChatHook): void {
     this.beforeHooks.push(hook)
-    console.log(`[HookManager] Registered before hook: ${hook.name}`)
   }
 
-  /**
-   * Register a hook to run after AgentCore invocation
-   */
   registerAfterHook(hook: ChatHook): void {
     this.afterHooks.push(hook)
-    console.log(`[HookManager] Registered after hook: ${hook.name}`)
   }
 
-  /**
-   * Execute all before hooks
-   */
   async executeBeforeHooks(context: ChatHookContext): Promise<void> {
-    console.log(`[HookManager] Executing ${this.beforeHooks.length} before hooks...`)
-
     for (const hook of this.beforeHooks) {
       const result = await hook.execute(context)
-
       if (!result.success) {
-        console.warn(`[HookManager] Hook "${hook.name}" failed, but continuing...`, result.error)
-        // Don't throw - hooks should not block the main flow
+        console.warn(`[Hook:${hook.name}] Failed:`, result.error)
       }
     }
-
-    console.log(`[HookManager] ✅ All before hooks completed`)
   }
 
-  /**
-   * Execute all after hooks
-   */
   async executeAfterHooks(context: ChatHookContext): Promise<void> {
-    console.log(`[HookManager] Executing ${this.afterHooks.length} after hooks...`)
-
     for (const hook of this.afterHooks) {
       const result = await hook.execute(context)
-
       if (!result.success) {
-        console.warn(`[HookManager] Hook "${hook.name}" failed, but continuing...`, result.error)
+        console.warn(`[Hook:${hook.name}] Failed:`, result.error)
       }
     }
-
-    console.log(`[HookManager] ✅ All after hooks completed`)
   }
 }
 

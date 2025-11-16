@@ -95,20 +95,6 @@ export const ToolExecutionContainer: React.FC<ToolExecutionContainerProps> = ({ 
           </p>
         </div>
       );
-    } else if (result.success && result.chart_id) {
-      // Fallback to API lookup for backward compatibility
-      return (
-        <div className="my-4">
-          <ChartRenderer
-            chartId={result.chart_id}
-            sessionId={sessionId}
-            toolUseId={toolUseId}
-          />
-          <p className="text-sm text-green-600 mt-2">
-            {result.message}
-          </p>
-        </div>
-      );
     } else {
       return (
         <div className="my-4 p-3 bg-red-50 border border-red-200 rounded">

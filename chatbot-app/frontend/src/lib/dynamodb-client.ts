@@ -232,12 +232,40 @@ export async function upsertSession(
   try {
     const now = new Date().toISOString()
 
-    // Try to get existing session
-    const existingSession = await getSession(userId, sessionId)
+    // Try to get existing session record by querying for this specific sessionId
+    let existingSK: string | undefined
+    let existingSession: SessionMetadata | null = null
+
+    try {
+      const command = new QueryCommand({
+        TableName: TABLE_NAME,
+        KeyConditionExpression: 'userId = :userId AND begins_with(sk, :sessionPrefix)',
+        ExpressionAttributeValues: marshall({
+          ':userId': userId,
+          ':sessionPrefix': 'SESSION#',
+        }),
+      })
+      const response = await dynamoClient.send(command)
+      if (response.Items && response.Items.length > 0) {
+        const records = response.Items.map((item) => unmarshall(item) as SessionRecord)
+        const existingRecord = records.find((r) => r.sessionId === sessionId)
+        if (existingRecord) {
+          existingSK = existingRecord.sk
+          existingSession = sessionRecordToMetadata(existingRecord)
+          console.log(`[DynamoDB] Found existing session: ${sessionId} with SK: ${existingSK}`)
+        }
+      }
+    } catch (error) {
+      console.log('[DynamoDB] No existing session found, will create new one')
+    }
+
+    // If no existing session found, generate new SK with current timestamp
+    // This ensures each new session gets a unique row
+    const sessionSK = (existingSK || generateSessionSK(sessionId, now)) as `SESSION#${string}`
 
     const record: SessionRecord = {
       userId,
-      sk: existingSession?.sk || generateSessionSK(sessionId, now),
+      sk: sessionSK,
       sessionId,
       title: data.title || existingSession?.title || 'New Conversation',
       status: data.status || existingSession?.status || 'active',
@@ -259,7 +287,7 @@ export async function upsertSession(
 
     await dynamoClient.send(command)
 
-    console.log(`[DynamoDB] Session upserted: ${sessionId}`)
+    console.log(`[DynamoDB] Session ${existingSK ? 'updated' : 'created'}: ${sessionId} with SK: ${sessionSK}`)
     return sessionRecordToMetadata(record)
   } catch (error) {
     console.error('[DynamoDB] Error upserting session:', error)

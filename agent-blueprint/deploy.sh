@@ -102,7 +102,7 @@ display_menu() {
     echo ""
     echo "  1) AgentCore Runtime      (Agent container on Bedrock AgentCore)"
     echo "  2) Frontend + BFF         (Next.js + CloudFront + ALB)"
-    echo "  3) MCP Servers            (Serverless Lambda + Fargate)"
+    echo "  3) MCP Tools              (AgentCore Gateway + Lambda functions)"
     echo "  4) Full Stack             (AgentCore + Frontend + MCPs)"
     echo ""
     echo "  0) Exit"
@@ -199,7 +199,7 @@ deploy_agentcore_runtime() {
 
     # Build and push Docker image
     log_step "Building Agent Core Docker image..."
-    cd ../chatbot-app/agentcore
+    cd ../../chatbot-app/agentcore
 
     # Login to ECR
     aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $REPO_URI
@@ -214,73 +214,30 @@ deploy_agentcore_runtime() {
 
     log_info "Image pushed: $REPO_URI:$IMAGE_TAG"
 
-    # Create AgentCore Runtime
-    log_step "Creating/Updating AgentCore Runtime..."
+    # Get Runtime info from CDK stack outputs
+    log_step "Retrieving Runtime information from CDK stack..."
 
-    # Note: Runtime name can only contain alphanumeric characters and underscores
-    RUNTIME_NAME="strands_agent_chatbot_runtime"
-
-    # Check if runtime already exists
-    RUNTIME_ARN=$(aws bedrock-agentcore list-agent-runtimes \
+    RUNTIME_ARN=$(aws cloudformation describe-stacks \
+        --stack-name AgentRuntimeStack \
         --region $AWS_REGION \
-        --query "agentRuntimes[?runtimeName=='$RUNTIME_NAME'].agentRuntimeArn" \
-        --output text 2>/dev/null || echo "")
+        --query 'Stacks[0].Outputs[?OutputKey==`AgentRuntimeArn`].OutputValue' \
+        --output text)
 
-    if [ -n "$RUNTIME_ARN" ]; then
-        log_warn "Runtime already exists: $RUNTIME_ARN"
-        log_step "Updating runtime configuration..."
-
-        # Create new version
-        aws bedrock-agentcore create-agent-runtime-version \
-            --agent-runtime-arn $RUNTIME_ARN \
-            --region $AWS_REGION || true
-    else
-        log_step "Creating new runtime..."
-
-        # Create runtime
-        RUNTIME_ARN=$(aws bedrock-agentcore create-agent-runtime \
-            --runtime-name "$RUNTIME_NAME" \
-            --description "Strands Agent Chatbot Runtime" \
-            --execution-role-arn $EXECUTION_ROLE_ARN \
-            --runtime-artifact "{\"agentRuntimeArtifactType\":\"Container\",\"containerConfiguration\":{\"imageUri\":\"$REPO_URI:$IMAGE_TAG\"}}" \
-            --protocol-configuration "{\"protocolType\":\"HTTP\"}" \
-            --region $AWS_REGION \
-            --query 'agentRuntimeArn' \
-            --output text)
-
-        log_info "Runtime created: $RUNTIME_ARN"
-    fi
-
-    # Get Runtime ID
-    RUNTIME_ID=$(echo $RUNTIME_ARN | awk -F'/' '{print $NF}')
-
-    # Update Parameter Store
-    log_step "Updating Parameter Store..."
-
-    aws ssm put-parameter \
-        --name "/strands-agent-chatbot/dev/agentcore/runtime-arn" \
-        --value "$RUNTIME_ARN" \
-        --type "String" \
-        --overwrite \
-        --region $AWS_REGION
-
-    aws ssm put-parameter \
-        --name "/strands-agent-chatbot/dev/agentcore/runtime-id" \
-        --value "$RUNTIME_ID" \
-        --type "String" \
-        --overwrite \
-        --region $AWS_REGION
-
-    log_info "Parameters updated"
+    RUNTIME_ID=$(aws cloudformation describe-stacks \
+        --stack-name AgentRuntimeStack \
+        --region $AWS_REGION \
+        --query 'Stacks[0].Outputs[?OutputKey==`AgentRuntimeId`].OutputValue' \
+        --output text)
 
     echo ""
     log_info "AgentCore Runtime deployment complete!"
     echo ""
     echo "Runtime ARN: $RUNTIME_ARN"
     echo "Runtime ID: $RUNTIME_ID"
+    echo "Memory ARN: $(aws cloudformation describe-stacks --stack-name AgentRuntimeStack --region $AWS_REGION --query 'Stacks[0].Outputs[?OutputKey==`MemoryArn`].OutputValue' --output text)"
     echo ""
 
-    cd ../..
+    cd ../../agent-blueprint
 }
 
 # Deploy Frontend + BFF
@@ -302,54 +259,71 @@ deploy_frontend() {
     cd ../..
 }
 
-# Deploy MCP Servers
+# Deploy MCP Servers (AgentCore Gateway + Lambda)
 deploy_mcp_servers() {
-    log_step "Deploying MCP Servers..."
+    log_step "Deploying AgentCore Gateway Stack..."
     echo ""
 
-    # Serverless MCPs (Lambda)
-    if [ -d "serverless-mcp-farm" ]; then
-        log_step "Deploying Serverless MCP Servers..."
-        cd serverless-mcp-farm
+    log_info "This will deploy:"
+    echo "  • AgentCore Gateway (MCP protocol with AWS_IAM auth)"
+    echo "  • 5 Lambda functions (ARM64, Python 3.13)"
+    echo "  • 12 MCP tools via Gateway Targets"
+    echo ""
 
-        if [ -f "deploy-server.sh" ]; then
-            chmod +x deploy-server.sh
-            ./deploy-server.sh
-        else
-            log_warn "serverless-mcp-farm/deploy-server.sh not found"
-        fi
+    log_step "Tools that will be available:"
+    echo "  • tavily_search, tavily_extract"
+    echo "  • wikipedia_search, wikipedia_get_article"
+    echo "  • arxiv_search, arxiv_get_paper"
+    echo "  • google_web_search, google_image_search"
+    echo "  • stock_quote, stock_history, financial_news, stock_analysis"
+    echo ""
 
-        cd ..
+    # Check if agentcore-gateway-stack exists
+    if [ ! -d "agentcore-gateway-stack" ]; then
+        log_error "agentcore-gateway-stack directory not found"
+        exit 1
     fi
 
-    # Stateful MCPs (Fargate)
-    if [ -d "fargate-mcp-farm" ]; then
-        log_step "Deploying Stateful MCP Servers..."
-        cd fargate-mcp-farm
+    cd agentcore-gateway-stack/scripts
 
-        # Deploy shared infrastructure first
-        if [ -d "shared-infrastructure" ]; then
-            cd shared-infrastructure
-            if [ -f "deploy.sh" ]; then
-                chmod +x deploy.sh
-                ./deploy.sh
-            fi
-            cd ..
-        fi
-
-        # Deploy individual MCP servers
-        if [ -f "deploy-all.sh" ]; then
-            chmod +x deploy-all.sh
-            ./deploy-all.sh -s nova-act-mcp
-            ./deploy-all.sh -s python-mcp
-        else
-            log_warn "fargate-mcp-farm/deploy-all.sh not found"
-        fi
-
-        cd ..
+    # Check if deploy script exists
+    if [ ! -f "deploy.sh" ]; then
+        log_error "agentcore-gateway-stack/scripts/deploy.sh not found"
+        exit 1
     fi
 
-    log_info "MCP Servers deployment complete!"
+    # Make script executable
+    chmod +x deploy.sh
+
+    # Export AWS region for the deployment script
+    export AWS_REGION
+    export PROJECT_NAME="strands-agent-chatbot"
+    export ENVIRONMENT="dev"
+
+    # Run deployment
+    ./deploy.sh
+
+    cd ../..
+
+    # Verify deployment
+    log_step "Verifying deployment..."
+
+    GATEWAY_URL=$(aws ssm get-parameter \
+        --name "/strands-agent-chatbot/dev/mcp/gateway-url" \
+        --query 'Parameter.Value' \
+        --output text \
+        --region $AWS_REGION 2>/dev/null || echo "")
+
+    if [ -n "$GATEWAY_URL" ]; then
+        log_info "Gateway deployed successfully!"
+        echo ""
+        echo "Gateway URL: $GATEWAY_URL"
+        echo ""
+    else
+        log_warn "Gateway URL not found in Parameter Store"
+    fi
+
+    log_info "AgentCore Gateway Stack deployment complete!"
 }
 
 # Main function
@@ -380,7 +354,8 @@ main() {
             ;;
         3)
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "  Option 3: MCP Servers Only"
+            echo "  Option 3: MCP Tools Only"
+            echo "  (AgentCore Gateway + Lambda)"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo ""
             deploy_mcp_servers
@@ -388,6 +363,7 @@ main() {
         4)
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo "  Option 4: Full Stack"
+            echo "  (Runtime + Frontend + Gateway)"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo ""
             deploy_agentcore_runtime

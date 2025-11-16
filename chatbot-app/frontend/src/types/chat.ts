@@ -15,7 +15,7 @@ export interface ToolExecution {
 }
 
 export interface Message {
-  id: number
+  id: number | string
   text: string
   sender: 'user' | 'bot'
   timestamp: string

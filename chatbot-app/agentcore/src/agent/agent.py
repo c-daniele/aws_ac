@@ -13,6 +13,7 @@ from pathlib import Path
 from strands import Agent
 from strands.models import BedrockModel
 from strands.session.file_session_manager import FileSessionManager
+from strands.hooks import HookProvider, HookRegistry, BeforeModelCallEvent
 from streaming.event_processor import StreamEventProcessor
 
 # AgentCore Memory integration (optional, only for cloud deployment)
@@ -32,7 +33,64 @@ from local_tools.visualization import create_visualization
 from local_tools.web_search import ddg_web_search
 from local_tools.url_fetcher import fetch_url_content
 
+# Import Gateway MCP client
+from agent.gateway_mcp_client import get_gateway_client_if_enabled
+
 logger = logging.getLogger(__name__)
+
+
+class ConversationCachingHook(HookProvider):
+    """Hook to add cache points to conversation history before model calls"""
+
+    def __init__(self, enabled: bool = True):
+        self.enabled = enabled
+
+    def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
+        registry.add_callback(BeforeModelCallEvent, self.add_conversation_cache_point)
+
+    def add_conversation_cache_point(self, event: BeforeModelCallEvent) -> None:
+        """Add cache point to last message in conversation history"""
+        if not self.enabled:
+            return
+
+        messages = event.agent.messages
+        if not messages or len(messages) == 0:
+            return
+
+        # Find the last user or assistant message (skip tool messages)
+        target_index = -1
+        for i in range(len(messages) - 1, -1, -1):
+            msg = messages[i]
+            msg_role = msg.get("role", "")
+            if msg_role in ("user", "assistant"):
+                target_index = i
+                break
+
+        if target_index == -1:
+            return
+
+        target_message = messages[target_index]
+        content = target_message.get("content", [])
+
+        # Check if cache point already exists
+        if isinstance(content, list):
+            has_cache_point = any(
+                isinstance(item, dict) and "cachePoint" in item
+                for item in content
+            )
+            if has_cache_point:
+                return
+
+            # Add cache point to existing content list
+            target_message["content"] = content + [{"cachePoint": {"type": "default"}}]
+        elif isinstance(content, str):
+            # Convert string to list with cache point
+            target_message["content"] = [
+                {"text": content},
+                {"cachePoint": {"type": "default"}}
+            ]
+
+        logger.debug(f"✅ Added cache point to conversation history (message index {target_index})")
 
 # Global stream processor instance
 _global_stream_processor = None
@@ -84,11 +142,22 @@ class ChatbotAgent:
         self.session_id = session_id
         self.user_id = user_id or session_id  # Use session_id as user_id if not provided
         self.enabled_tools = enabled_tools
+        self.gateway_client = None  # Store Gateway MCP client for lifecycle management
 
         # Store model configuration
         self.model_id = model_id or "us.anthropic.claude-haiku-4-5-20251001-v1:0"
         self.temperature = temperature if temperature is not None else 0.7
-        self.system_prompt = system_prompt or "You are a helpful AI assistant."
+        self.system_prompt = system_prompt or """You are an intelligent AI agent with dynamic tool capabilities. You can perform various tasks based on the combination of tools available to you.
+
+Key guidelines:
+- You can ONLY use tools that are explicitly provided to you in each conversation
+- Available tools may change throughout the conversation based on user preferences
+- When multiple tools are available, select and use the most appropriate combination in the optimal order to fulfill the user's request
+- Break down complex tasks into steps and use multiple tools sequentially or in parallel as needed
+- Always explain your reasoning when using tools
+- If you don't have the right tool for a task, clearly inform the user about the limitation
+
+Your goal is to be helpful, accurate, and efficient in completing user requests using the available tools."""
         self.caching_enabled = caching_enabled if caching_enabled is not None else True
 
         # Session Manager Selection: AgentCore Memory (cloud) vs File-based (local)
@@ -145,21 +214,46 @@ class ChatbotAgent:
         }
 
     def get_filtered_tools(self) -> List:
-        """Get tools filtered by enabled_tools list"""
+        """
+        Get tools filtered by enabled_tools list.
+        Includes both local tools and Gateway MCP client (Managed Integration).
+        """
         # If no enabled_tools specified (None or empty), return NO tools
         if self.enabled_tools is None or len(self.enabled_tools) == 0:
             logger.info("No enabled_tools specified - Agent will run WITHOUT any tools")
             return []
 
-        # Filter tools based on enabled_tools
+        # Filter local tools based on enabled_tools
         filtered_tools = []
+        gateway_tool_ids = []
+
         for tool_id in self.enabled_tools:
             if tool_id in TOOL_REGISTRY:
+                # Local tool
                 filtered_tools.append(TOOL_REGISTRY[tool_id])
+            elif tool_id.startswith("gateway_"):
+                # Gateway MCP tool - collect for filtering
+                gateway_tool_ids.append(tool_id)
             else:
                 logger.warning(f"Tool '{tool_id}' not found in registry, skipping")
 
-        logger.info(f"User-specific tool filter: {len(filtered_tools)} enabled tools: {self.enabled_tools}")
+        logger.info(f"Local tools enabled: {len(filtered_tools)}")
+        logger.info(f"Gateway tools enabled: {len(gateway_tool_ids)}")
+
+        # Add Gateway MCP client if Gateway tools are enabled
+        # Store as instance variable to keep session alive during Agent lifecycle
+        if gateway_tool_ids:
+            self.gateway_client = get_gateway_client_if_enabled(enabled_tool_ids=gateway_tool_ids)
+            if self.gateway_client:
+                # Using Managed Integration (Strands 1.16+) - pass MCPClient directly to Agent
+                # Agent will automatically manage lifecycle and filter tools
+                filtered_tools.append(self.gateway_client)
+                logger.info(f"✅ Gateway MCP client added (Managed Integration with Strands 1.16+)")
+                logger.info(f"   Enabled Gateway tool IDs: {gateway_tool_ids}")
+            else:
+                logger.warning("⚠️  Gateway MCP client not available")
+
+        logger.info(f"Total enabled tools: {len(filtered_tools)} (local + gateway client)")
         return filtered_tools
 
     def create_agent(self):
@@ -167,22 +261,54 @@ class ChatbotAgent:
         try:
             config = self.get_model_config()
 
+            # Prepare system prompt with cache point if caching enabled
+            system_prompts = config.get("system_prompts", [])
+            if self.caching_enabled and system_prompts:
+                # Convert string to SystemContentBlock format with cache point
+                if isinstance(system_prompts, str):
+                    system_content = [
+                        {"text": system_prompts},
+                        {"cachePoint": {"type": "default"}}
+                    ]
+                elif isinstance(system_prompts, list):
+                    # Check if already has cache point
+                    has_cache_point = any(
+                        isinstance(item, dict) and "cachePoint" in item
+                        for item in system_prompts
+                    )
+                    if not has_cache_point:
+                        system_content = system_prompts + [{"cachePoint": {"type": "default"}}]
+                    else:
+                        system_content = system_prompts
+                else:
+                    system_content = system_prompts
+                logger.info("✅ Added cache point to system prompt")
+            else:
+                system_content = system_prompts
+
             # Create model
             model = BedrockModel(
                 model_id=config["model_id"],
                 temperature=config.get("temperature", 0.7),
-                system=config.get("system_prompts", [])
+                system=system_content
             )
 
             # Get filtered tools based on user preferences
             tools = self.get_filtered_tools()
 
-            # Create agent with session manager for automatic conversation persistence
-            # If session_manager is None (no MEMORY_ID), Agent will run without memory
+            # Create conversation caching hook if enabled
+            hooks = []
+            if self.caching_enabled:
+                conversation_hook = ConversationCachingHook(enabled=True)
+                hooks.append(conversation_hook)
+                logger.info("✅ Conversation caching hook enabled")
+
+            # Create agent with session manager and hooks
             self.agent = Agent(
                 model=model,
                 tools=tools,
-                session_manager=self.session_manager  # ← AgentCore Memory: auto load/save
+                session_manager=self.session_manager,
+                hooks=hooks if hooks else None
             )
 
             logger.info(f"✅ Agent created with {len(tools)} tools")

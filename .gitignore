@@ -152,3 +152,19 @@ deployed-servers.txt
 
 CLAUDE.md
 .claude
+
+# AgentCore Runtime - Session data and temporary files
+chatbot-app/agentcore/sessions/
+**/sessions/
+
+# Backup directories
+**/backup_*/
+**/backup/
+
+# Build artifacts
+*.tsbuildinfo
+tsconfig.tsbuildinfo
+
+# Temporary test scripts
+verify-build.sh
+**/verify-*.sh

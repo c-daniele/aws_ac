@@ -61,53 +61,71 @@ export class ChatbotStack extends cdk.Stack {
 
     // ============================================================
     // DynamoDB Tables for User and Session Management
+    // Import existing tables if they exist, otherwise create new ones
     // ============================================================
 
     // Users Table - User profiles and preferences
-    const usersTable = new dynamodb.Table(this, 'ChatbotUsersTable', {
-      tableName: `${projectName}-users`,
-      partitionKey: {
-        name: 'userId',
-        type: dynamodb.AttributeType.STRING
-      },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST, // On-demand pricing
-      removalPolicy: cdk.RemovalPolicy.RETAIN, // Keep user data on stack deletion
-      pointInTimeRecovery: true, // Enable backup
-      encryption: dynamodb.TableEncryption.AWS_MANAGED,
-      timeToLiveAttribute: 'ttl', // Optional TTL for temporary data
-    });
+    // Check if USE_EXISTING_TABLES=true to import existing tables
+    const useExistingTables = process.env.USE_EXISTING_TABLES === 'true'
+
+    const usersTable = useExistingTables
+      ? dynamodb.Table.fromTableName(
+          this,
+          'ChatbotUsersTable',
+          `${projectName}-users`
+        )
+      : new dynamodb.Table(this, 'ChatbotUsersTable', {
+          tableName: `${projectName}-users`,
+          partitionKey: {
+            name: 'userId',
+            type: dynamodb.AttributeType.STRING
+          },
+          billingMode: dynamodb.BillingMode.PAY_PER_REQUEST, // On-demand pricing
+          removalPolicy: cdk.RemovalPolicy.DESTROY, // Delete table on stack deletion
+          pointInTimeRecovery: true, // Enable backup
+          encryption: dynamodb.TableEncryption.AWS_MANAGED,
+          timeToLiveAttribute: 'ttl', // Optional TTL for temporary data
+        });
 
     // Sessions Table - Conversation sessions metadata
-    const sessionsTable = new dynamodb.Table(this, 'ChatbotSessionsTable', {
-      tableName: `${projectName}-sessions`,
-      partitionKey: {
-        name: 'sessionId',
-        type: dynamodb.AttributeType.STRING
-      },
-      sortKey: {
-        name: 'userId',
-        type: dynamodb.AttributeType.STRING
-      },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      removalPolicy: cdk.RemovalPolicy.RETAIN, // Keep session history
-      pointInTimeRecovery: true,
-      encryption: dynamodb.TableEncryption.AWS_MANAGED,
-      timeToLiveAttribute: 'ttl', // Auto-delete old sessions
-    });
+    const sessionsTable = useExistingTables
+      ? dynamodb.Table.fromTableName(
+          this,
+          'ChatbotSessionsTable',
+          `${projectName}-sessions`
+        )
+      : new dynamodb.Table(this, 'ChatbotSessionsTable', {
+          tableName: `${projectName}-sessions`,
+          partitionKey: {
+            name: 'sessionId',
+            type: dynamodb.AttributeType.STRING
+          },
+          sortKey: {
+            name: 'userId',
+            type: dynamodb.AttributeType.STRING
+          },
+          billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+          removalPolicy: cdk.RemovalPolicy.DESTROY, // Delete table on stack deletion
+          pointInTimeRecovery: true,
+          encryption: dynamodb.TableEncryption.AWS_MANAGED,
+          timeToLiveAttribute: 'ttl', // Auto-delete old sessions
+        });
 
-    // GSI for querying sessions by userId
-    sessionsTable.addGlobalSecondaryIndex({
-      indexName: 'UserSessionsIndex',
-      partitionKey: {
-        name: 'userId',
-        type: dynamodb.AttributeType.STRING
-      },
-      sortKey: {
-        name: 'lastMessageAt',
-        type: dynamodb.AttributeType.STRING
-      },
-      projectionType: dynamodb.ProjectionType.ALL,
-    });
+    // GSI for querying sessions by userId (only for new tables)
+    if (!useExistingTables && sessionsTable instanceof dynamodb.Table) {
+      sessionsTable.addGlobalSecondaryIndex({
+        indexName: 'UserSessionsIndex',
+        partitionKey: {
+          name: 'userId',
+          type: dynamodb.AttributeType.STRING
+        },
+        sortKey: {
+          name: 'lastMessageAt',
+          type: dynamodb.AttributeType.STRING
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+      });
+    }
 
     // ============================================================
     // Step 1: ECR Repository for Frontend+BFF
@@ -275,6 +293,10 @@ export class ChatbotStack extends cdk.Stack {
     // Step 4: Upload Frontend Source to S3
     // ============================================================
     const frontendSourcePath = '../../../chatbot-app/frontend';
+
+    // Use CUSTOM hash type with deployment timestamp to force re-upload every time
+    const deployTimestamp = Date.now().toString();
+
     const frontendSourceUpload = new s3deploy.BucketDeployment(this, 'FrontendSourceUpload', {
       sources: [
         s3deploy.Source.asset(frontendSourcePath, {
@@ -295,12 +317,14 @@ export class ChatbotStack extends cdk.Stack {
             'dist/**',
           ],
           followSymlinks: cdk.SymlinkFollowMode.NEVER,
-          ignoreMode: cdk.IgnoreMode.GIT,
+          ignoreMode: cdk.IgnoreMode.DOCKER,  // Allow uncommitted changes
+          assetHashType: cdk.AssetHashType.CUSTOM,  // Use custom hash
+          assetHash: deployTimestamp,  // Force new hash on every deployment
         }),
       ],
       destinationBucket: sourceBucket,
       destinationKeyPrefix: 'frontend-source/',
-      prune: false,
+      prune: true,  // Clean up old versions
       retainOnDelete: false,
     });
 

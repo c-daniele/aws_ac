@@ -167,16 +167,6 @@ const NonMemoizedMarkdown = ({
               <ChartRenderer chartData={part.chartData} />
             </div>
           );
-        } else if (part.type === 'chartRef' && part.chartName) {
-          return (
-            <div key={index} className="my-6 not-prose">
-              <ChartRenderer 
-                chartId={part.chartName}
-                sessionId={sessionId}
-                toolUseId={toolUseId}
-              />
-            </div>
-          );
         } else if (part.type === 'image' && part.imageId) {
           return (
             <div key={index} className="my-6 not-prose">

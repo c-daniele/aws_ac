@@ -141,9 +141,7 @@ main() {
     setup_shared_venv
 
     print_warning "Destroying ALL components including:"
-    echo "  - All Fargate MCP Servers"
-    echo "  - Shared Infrastructure (ALB)"
-    echo "  - All Serverless MCP Servers"
+    echo "  - AgentCore Gateway Stack (Gateway + Lambda functions)"
     echo "  - Web Application (Chatbot)"
     echo "  - Cognito User Pools and Authentication"
     echo "  - ECR repositories and Docker images"
@@ -152,105 +150,50 @@ main() {
 
     print_status "Starting destruction in dependency order..."
 
-    # Step 1: Destroy Fargate MCP Servers (depend on shared ALB)
-    print_status "🗑️  Step 1: Destroying Fargate MCP Servers..."
+    # Step 1: Destroy AgentCore Gateway Stack
+    print_status "🗑️  Step 1: Destroying AgentCore Gateway Stack..."
 
-    # Python MCP Server
-    if [ -f "fargate-mcp-farm/python-mcp/destroy.sh" ]; then
-        print_status "Destroying Python MCP Server..."
-        cd fargate-mcp-farm/python-mcp
+    if [ -f "agentcore-gateway-stack/scripts/destroy.sh" ]; then
+        cd agentcore-gateway-stack/scripts
         chmod +x destroy.sh
-        ./destroy.sh || destroy_stack "python-mcp-fargate" "cdk" "true"
-        cd - > /dev/null
-    else
-        destroy_stack "python-mcp-fargate" "fargate-mcp-farm/python-mcp/cdk" "true"
-    fi
 
-    # Nova Act MCP Server
-    if [ -f "fargate-mcp-farm/nova-act-mcp/destroy.sh" ]; then
-        print_status "Destroying Nova Act MCP Server..."
-        cd fargate-mcp-farm/nova-act-mcp
-        chmod +x destroy.sh
-        ./destroy.sh || destroy_stack "nova-act-mcp-fargate" "cdk" "true"
-        cd - > /dev/null
-    else
-        destroy_stack "nova-act-mcp-fargate" "fargate-mcp-farm/nova-act-mcp/cdk" "true"
-    fi
-
-    # Step 2: Destroy Shared Infrastructure (depends on VPC from chatbot)
-    print_status "🗑️  Step 2: Destroying Shared Infrastructure..."
-    destroy_stack "McpFarmAlbStack" "fargate-mcp-farm/shared-infrastructure/cdk" "true"
-
-    # Step 3: Destroy Serverless MCP Servers (independent)
-    print_status "🗑️  Step 3: Destroying Serverless MCP Servers..."
-
-    if [ -f "serverless-mcp-farm/destroy-all-mcp.sh" ]; then
-        cd serverless-mcp-farm
-        chmod +x destroy-all-mcp.sh
-
-        # Export environment variables for the subprocess
+        # Export environment variables
         export AWS_REGION
         export AWS_DEFAULT_REGION
-        export NEXT_PUBLIC_AWS_REGION
 
-        ./destroy-all-mcp.sh || {
-            print_warning "Bulk destroy failed, trying individual servers..."
+        ./destroy.sh || {
+            print_warning "Dedicated destroy script failed, trying manual CDK destruction..."
 
-            # Individual serverless MCP server deletion with correct stack names
-            declare -A server_stacks=(
-                ["aws-documentation"]="mcp-aws-documentation-server"
-                ["aws-pricing"]="mcp-aws-pricing-server"
-                ["bedrock-kb-retrieval"]="mcp-bedrock-kb-retrieval-server"
-                ["tavily-web-search"]="mcp-tavily-web-search-server"
-                ["financial-market"]="mcp-financial-analysis-server"
-            )
+            # Try manual CDK destroy
+            cd ../infrastructure
+            if [ -d "node_modules" ]; then
+                npx cdk destroy --all --force --require-approval never 2>/dev/null || {
+                    print_warning "CDK destroy failed, trying CloudFormation..."
 
-            for server in aws-documentation aws-pricing bedrock-kb-retrieval tavily-web-search financial-market; do
-                stack_name="${server_stacks[$server]}"
-                print_status "Destroying $server MCP server (stack: $stack_name)..."
-                aws cloudformation delete-stack --stack-name "$stack_name" --region $AWS_REGION 2>/dev/null || true
-            done
+                    # Destroy in reverse dependency order
+                    for stack in strands-agent-chatbot-GatewayTargetStack \
+                                strands-agent-chatbot-GatewayLambdaStack \
+                                strands-agent-chatbot-GatewayStack \
+                                strands-agent-chatbot-GatewayIamStack; do
+                        destroy_stack "$stack" "" ""
+                    done
+                }
+            fi
         }
         cd - > /dev/null
     else
-        # Manual serverless stack deletion with correct stack names
-        declare -A server_stacks=(
-            ["aws-documentation"]="mcp-aws-documentation-server"
-            ["aws-pricing"]="mcp-aws-pricing-server"
-            ["bedrock-kb-retrieval"]="mcp-bedrock-kb-retrieval-server"
-            ["tavily-web-search"]="mcp-tavily-web-search-server"
-            ["financial-market"]="mcp-financial-analysis-server"
-        )
-
-        for server in aws-documentation aws-pricing bedrock-kb-retrieval tavily-web-search financial-market; do
-            stack_name="${server_stacks[$server]}"
-            print_status "Destroying $server MCP server (stack: $stack_name)..."
-            aws cloudformation delete-stack --stack-name "$stack_name" --region $AWS_REGION 2>/dev/null || true
+        # Direct stack deletion
+        print_status "No destroy script found, using direct stack deletion..."
+        for stack in strands-agent-chatbot-GatewayTargetStack \
+                    strands-agent-chatbot-GatewayLambdaStack \
+                    strands-agent-chatbot-GatewayStack \
+                    strands-agent-chatbot-GatewayIamStack; do
+            destroy_stack "$stack" "" ""
         done
     fi
 
-    # Step 4: Destroy AgentCore MCP Servers (independent)
-    print_status "🗑️  Step 4: Destroying AgentCore MCP Servers..."
-
-    if [ -f "agentcore-mcp-farm/destroy-all.sh" ]; then
-        cd agentcore-mcp-farm
-        chmod +x destroy-all.sh
-
-        # Export environment variables for the subprocess
-        export AWS_REGION
-        export AWS_DEFAULT_REGION
-        export NEXT_PUBLIC_AWS_REGION
-
-        ./destroy-all.sh || {
-            print_warning "Bulk destroy failed for AgentCore MCP servers"
-        }
-        cd - > /dev/null
-    else
-        print_status "AgentCore MCP farm not found, skipping..."
-    fi
-
-    # Step 5: Destroy Web Application (base VPC - destroy last)
-    print_status "🗑️  Step 5: Destroying Web Application (Chatbot)..."
+    # Step 2: Destroy Web Application (base VPC - destroy last)
+    print_status "🗑️  Step 2: Destroying Web Application (Chatbot)..."
 
     if [ -f "chatbot-deployment/infrastructure/scripts/destroy.sh" ]; then
         cd chatbot-deployment/infrastructure

@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Settings, Brain, Thermometer, MessageSquare, Plus, Edit2, Save } from 'lucide-react';
-import { getApiUrl } from '@/config/environment';
+import { apiGet, apiPost, apiPut } from '@/lib/api-client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from './ui/label';
@@ -34,9 +34,6 @@ interface ModelConfig {
     prompt: string;
     active: boolean;
   } | null;
-  caching?: {
-    enabled: boolean;
-  };
 }
 
 interface SystemPrompt {
@@ -71,7 +68,6 @@ export function ModelConfigDialog({ sessionId }: ModelConfigDialogProps) {
   const [selectedModelId, setSelectedModelId] = useState('');
   const [selectedTemperature, setSelectedTemperature] = useState(0.7);
   const [selectedPromptId, setSelectedPromptId] = useState('');
-  const [cachingEnabled, setCachingEnabled] = useState(true);
   
   // Prompt editing
   const [editingPrompt, setEditingPrompt] = useState<SystemPrompt | null>(null);
@@ -93,7 +89,6 @@ export function ModelConfigDialog({ sessionId }: ModelConfigDialogProps) {
       setSelectedModelId(currentConfig.model_id);
       setSelectedTemperature(currentConfig.temperature);
       setSelectedPromptId(currentConfig.active_prompt?.id || '');
-      setCachingEnabled(currentConfig.caching?.enabled ?? true);
     }
   }, [currentConfig]);
 
@@ -114,24 +109,13 @@ export function ModelConfigDialog({ sessionId }: ModelConfigDialogProps) {
 
   const loadModelConfig = async () => {
     try {
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json'
-      };
-      
-      // Include session ID in headers if available
-      if (sessionId) {
-        headers['X-Session-ID'] = sessionId;
-      }
-      
-      const response = await fetch(getApiUrl('model/config'), {
-        method: 'GET',
-        headers
-      });
-      
-      const data = await response.json();
-      
-      // Session ID is managed by parent component
-      
+      const data = await apiGet<{ success: boolean; config: any }>(
+        'model/config',
+        {
+          headers: sessionId ? { 'X-Session-ID': sessionId } : {},
+        }
+      );
+
       if (data.success && data.config) {
         const config = data.config;
         const activePrompt = config.system_prompts?.find((p: SystemPrompt) => p.active) || null;
@@ -139,7 +123,6 @@ export function ModelConfigDialog({ sessionId }: ModelConfigDialogProps) {
           model_id: config.model_id,
           temperature: config.temperature,
           active_prompt: activePrompt,
-          caching: config.caching || { enabled: true }
         });
       }
     } catch (error) {
@@ -149,23 +132,13 @@ export function ModelConfigDialog({ sessionId }: ModelConfigDialogProps) {
 
   const loadSystemPrompts = async () => {
     try {
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json'
-      };
-      
-      if (sessionId) {
-        headers['X-Session-ID'] = sessionId;
-      }
-      
-      const response = await fetch(getApiUrl('model/prompts'), {
-        method: 'GET',
-        headers
-      });
-      
-      const data = await response.json();
-      
-      // Session ID is managed by parent component
-      
+      const data = await apiGet<{ prompts: SystemPrompt[] }>(
+        'model/prompts',
+        {
+          headers: sessionId ? { 'X-Session-ID': sessionId } : {},
+        }
+      );
+
       setPrompts(data.prompts || []);
     } catch (error) {
       console.error('Failed to load system prompts:', error);
@@ -174,23 +147,13 @@ export function ModelConfigDialog({ sessionId }: ModelConfigDialogProps) {
 
   const loadAvailableModels = async () => {
     try {
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json'
-      };
-      
-      if (sessionId) {
-        headers['X-Session-ID'] = sessionId;
-      }
-      
-      const response = await fetch(getApiUrl('model/available-models'), {
-        method: 'GET',
-        headers
-      });
-      
-      const data = await response.json();
-      
-      // Session ID is managed by parent component
-      
+      const data = await apiGet<{ models: AvailableModel[] }>(
+        'model/available-models',
+        {
+          headers: sessionId ? { 'X-Session-ID': sessionId } : {},
+        }
+      );
+
       setAvailableModels(data.models || []);
     } catch (error) {
       console.error('Failed to load available models:', error);
@@ -201,53 +164,26 @@ export function ModelConfigDialog({ sessionId }: ModelConfigDialogProps) {
     setSaving(true);
     try {
       // Update model configuration
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json'
-      };
-      
-      if (sessionId) {
-        headers['X-Session-ID'] = sessionId;
-      }
-      
-      const modelResponse = await fetch(getApiUrl('model/config/update'), {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
+      await apiPost(
+        'model/config/update',
+        {
           model_id: selectedModelId,
           temperature: selectedTemperature,
-          caching: {
-            enabled: cachingEnabled
-          }
-        }),
-      });
-      
-      // Session ID is managed by parent component
-
-      if (!modelResponse.ok) {
-        throw new Error('Failed to update model configuration');
-      }
+        },
+        {
+          headers: sessionId ? { 'X-Session-ID': sessionId } : {},
+        }
+      );
 
       // Activate selected prompt if different from current
       if (selectedPromptId && selectedPromptId !== currentConfig?.active_prompt?.id) {
-        const promptHeaders: Record<string, string> = {
-          'Content-Type': 'application/json'
-        };
-        
-        if (sessionId) {
-          promptHeaders['X-Session-ID'] = sessionId;
-        }
-        
-        const promptResponse = await fetch(getApiUrl(`model/prompts/${selectedPromptId}/activate`), {
-          method: 'POST',
-          headers: promptHeaders,
-        });
-
-        if (!promptResponse.ok) {
-          throw new Error('Failed to activate system prompt');
-        }
-        
-        // Extract and update session ID from response headers
-        // Session ID is managed by parent component
+        await apiPost(
+          `model/prompts/${selectedPromptId}/activate`,
+          undefined,
+          {
+            headers: sessionId ? { 'X-Session-ID': sessionId } : {},
+          }
+        );
       }
 
       // Close with a smooth delay
@@ -264,32 +200,21 @@ export function ModelConfigDialog({ sessionId }: ModelConfigDialogProps) {
 
     setLoading(true);
     try {
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json'
-      };
-      
-      if (sessionId) {
-        headers['X-Session-ID'] = sessionId;
-      }
-      
-      const response = await fetch(getApiUrl('model/prompts'), {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
+      await apiPost(
+        'model/prompts',
+        {
           name: newPromptName,
           prompt: newPromptContent,
-        }),
-      });
+        },
+        {
+          headers: sessionId ? { 'X-Session-ID': sessionId } : {},
+        }
+      );
 
-      if (response.ok) {
-        // Extract and update session ID from response headers
-        // Session ID is managed by parent component
-        
-        setNewPromptName('');
-        setNewPromptContent('');
-        setShowNewPromptForm(false);
-        await loadSystemPrompts();
-      }
+      setNewPromptName('');
+      setNewPromptContent('');
+      setShowNewPromptForm(false);
+      await loadSystemPrompts();
     } catch (error) {
       console.error('Failed to create prompt:', error);
     } finally {
@@ -302,31 +227,20 @@ export function ModelConfigDialog({ sessionId }: ModelConfigDialogProps) {
 
     setLoading(true);
     try {
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json'
-      };
-      
-      if (sessionId) {
-        headers['X-Session-ID'] = sessionId;
-      }
-      
-      const response = await fetch(getApiUrl(`model/prompts/${editingPrompt.id}`), {
-        method: 'PUT',
-        headers,
-        body: JSON.stringify({
+      await apiPut(
+        `model/prompts/${editingPrompt.id}`,
+        {
           name: editingPrompt.name,
           prompt: editingPrompt.prompt,
-        }),
-      });
+        },
+        {
+          headers: sessionId ? { 'X-Session-ID': sessionId } : {},
+        }
+      );
 
-      if (response.ok) {
-        // Extract and update session ID from response headers
-        // Session ID is managed by parent component
-        
-        setEditingPrompt(null);
-        await loadSystemPrompts();
-        await loadModelConfig();
-      }
+      setEditingPrompt(null);
+      await loadSystemPrompts();
+      await loadModelConfig();
     } catch (error) {
       console.error('Failed to update prompt:', error);
     } finally {
@@ -414,26 +328,6 @@ export function ModelConfigDialog({ sessionId }: ModelConfigDialogProps) {
               <div className="flex justify-between text-xs text-muted-foreground">
                 <span>Focused (0.0)</span>
                 <span>Creative (1.0)</span>
-              </div>
-            </div>
-
-            {/* Caching Configuration */}
-            <div className="space-y-2">
-              <Label className="flex items-center gap-2">
-                <Brain className="h-4 w-4" />
-                Prompt Caching
-              </Label>
-              <div className="flex items-center justify-between p-3 bg-muted rounded-md">
-                <div className="space-y-1">
-                  <div className="text-sm font-medium">Enable Prompt Caching</div>
-                  <div className="text-xs text-muted-foreground">
-                    Automatically adds cache points after tool execution for improved performance and reduced costs
-                  </div>
-                </div>
-                <Switch
-                  checked={cachingEnabled}
-                  onCheckedChange={setCachingEnabled}
-                />
               </div>
             </div>
 

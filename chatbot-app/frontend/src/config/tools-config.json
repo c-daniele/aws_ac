@@ -1,0 +1,166 @@
+{
+  "local_tools": [
+    {
+      "id": "calculator",
+      "name": "Calculator",
+      "description": "Perform mathematical calculations and computations",
+      "category": "utilities",
+      "icon": "🧮",
+      "enabled": true,
+      "isDynamic": false
+    },
+    {
+      "id": "get_current_weather",
+      "name": "Weather Lookup",
+      "description": "Get current weather information for any city worldwide",
+      "category": "utilities",
+      "icon": "🌤️",
+      "enabled": true,
+      "isDynamic": false
+    },
+    {
+      "id": "create_visualization",
+      "name": "Visualization Creator",
+      "description": "Create interactive charts and visualizations from data",
+      "category": "utilities",
+      "icon": "📊",
+      "enabled": true,
+      "isDynamic": false
+    },
+    {
+      "id": "ddg_web_search",
+      "name": "Web Search",
+      "description": "Search the web using DuckDuckGo",
+      "category": "search",
+      "icon": "🔍",
+      "enabled": true,
+      "isDynamic": false
+    },
+    {
+      "id": "fetch_url_content",
+      "name": "URL Fetcher",
+      "description": "Fetch and extract content from web URLs",
+      "category": "utilities",
+      "icon": "🌐",
+      "enabled": true,
+      "isDynamic": false
+    }
+  ],
+  "gateway_targets": [
+    {
+      "id": "gateway_wikipedia-search",
+      "name": "Wikipedia",
+      "description": "Wikipedia article search and retrieval",
+      "category": "knowledge",
+      "icon": "📚",
+      "enabled": false,
+      "isDynamic": true,
+      "tools": [
+        {
+          "id": "gateway_wikipedia-search___wikipedia_search",
+          "name": "Search Articles",
+          "description": "Search Wikipedia for articles"
+        },
+        {
+          "id": "gateway_wikipedia-get-article___wikipedia_get_article",
+          "name": "Get Article",
+          "description": "Get full content of a Wikipedia article"
+        }
+      ]
+    },
+    {
+      "id": "gateway_arxiv-search",
+      "name": "ArXiv",
+      "description": "Scientific paper search and retrieval",
+      "category": "research",
+      "icon": "🔬",
+      "enabled": false,
+      "isDynamic": true,
+      "tools": [
+        {
+          "id": "gateway_arxiv-search___arxiv_search",
+          "name": "Search Papers",
+          "description": "Search scientific papers on ArXiv"
+        },
+        {
+          "id": "gateway_arxiv-get-paper___arxiv_get_paper",
+          "name": "Get Paper",
+          "description": "Get full paper content from ArXiv by paper ID"
+        }
+      ]
+    },
+    {
+      "id": "gateway_google-web-search",
+      "name": "Google Search",
+      "description": "Google web and image search",
+      "category": "search",
+      "icon": "🔍",
+      "enabled": false,
+      "isDynamic": true,
+      "tools": [
+        {
+          "id": "gateway_google-web-search___google_web_search",
+          "name": "Web Search",
+          "description": "Search the web using Google Custom Search"
+        },
+        {
+          "id": "gateway_google-image-search___google_image_search",
+          "name": "Image Search",
+          "description": "Search for images using Google"
+        }
+      ]
+    },
+    {
+      "id": "gateway_tavily-search",
+      "name": "Tavily AI",
+      "description": "AI-powered web search and content extraction",
+      "category": "search",
+      "icon": "🤖",
+      "enabled": false,
+      "isDynamic": true,
+      "tools": [
+        {
+          "id": "gateway_tavily-search___tavily_search",
+          "name": "AI Search",
+          "description": "AI-powered web search using Tavily"
+        },
+        {
+          "id": "gateway_tavily-extract___tavily_extract",
+          "name": "Content Extract",
+          "description": "Extract clean content from web URLs"
+        }
+      ]
+    },
+    {
+      "id": "gateway_financial-news",
+      "name": "Financial Market",
+      "description": "Stock quotes, history, news and analysis",
+      "category": "finance",
+      "icon": "📈",
+      "enabled": false,
+      "isDynamic": true,
+      "tools": [
+        {
+          "id": "gateway_stock-quote___stock_quote",
+          "name": "Stock Quote",
+          "description": "Get current stock quote with key metrics"
+        },
+        {
+          "id": "gateway_stock-history___stock_history",
+          "name": "Stock History",
+          "description": "Get historical stock price data"
+        },
+        {
+          "id": "gateway_financial-news___financial_news",
+          "name": "Financial News",
+          "description": "Get latest financial news articles"
+        },
+        {
+          "id": "gateway_stock-analysis___stock_analysis",
+          "name": "Stock Analysis",
+          "description": "Get comprehensive stock analysis"
+        }
+      ]
+    }
+  ]
+}

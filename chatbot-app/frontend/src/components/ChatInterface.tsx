@@ -35,10 +35,12 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
     currentReasoning,
     toolProgress,
     sendMessage,
-    clearChat,
+    newChat,
     toggleTool,
     refreshTools,
     sessionId,
+    loadSession,
+    onGatewayToolsChange,
   } = useChat()
 
   // iframe auth (only for embedded mode)
@@ -72,10 +74,10 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
     setSuggestionKey(`suggestion-${Date.now()}`)
   }, [])
 
-  const handleClearChat = useCallback(async () => {
-    await clearChat()
+  const handleNewChat = useCallback(async () => {
+    await newChat()
     regenerateSuggestions()
-  }, [clearChat, regenerateSuggestions])
+  }, [newChat, regenerateSuggestions])
 
   const handleToggleTool = useCallback(
     async (toolId: string) => {
@@ -174,9 +176,11 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
       <ToolSidebar
         availableTools={availableTools}
         onToggleTool={handleToggleTool}
-        onClearChat={handleClearChat}
+        onNewChat={handleNewChat}
         refreshTools={refreshTools}
         sessionId={sessionId}
+        loadSession={loadSession}
+        onGatewayToolsChange={onGatewayToolsChange}
       />
 
       {/* Main Chat Area */}

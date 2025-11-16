@@ -120,7 +120,8 @@ async function invokeLocalAgentCore(
     inputData.caching_enabled = cachingEnabled
   }
 
-  if (enabledTools && enabledTools.length > 0) {
+  // Always include enabled_tools (even if empty) to avoid Bedrock toolConfig validation errors
+  if (enabledTools !== undefined) {
     inputData.enabled_tools = enabledTools
     console.log(`[AgentCore]    Enabled tools (${enabledTools.length}):`, enabledTools)
   }
@@ -212,7 +213,8 @@ async function invokeAwsAgentCore(
     inputData.caching_enabled = cachingEnabled
   }
 
-  if (enabledTools && enabledTools.length > 0) {
+  // Always include enabled_tools (even if empty) to avoid Bedrock toolConfig validation errors
+  if (enabledTools !== undefined) {
     inputData.enabled_tools = enabledTools
     console.log(`[AgentCore]    Enabled tools (${enabledTools.length}):`, enabledTools)
   }

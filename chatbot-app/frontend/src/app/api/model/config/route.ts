@@ -49,10 +49,7 @@ export async function GET(request: NextRequest) {
     let config = {
       model_id: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
       temperature: 0.7,
-      system_prompts: DEFAULT_PROMPTS,
-      caching: {
-        enabled: true
-      }
+      system_prompts: DEFAULT_PROMPTS
     }
 
     if (userId === 'anonymous') {
@@ -78,9 +75,6 @@ export async function GET(request: NextRequest) {
             prompt: savedConfig.system_prompt,
             active: true
           })
-        }
-        if (savedConfig.caching_enabled !== undefined) {
-          config.caching.enabled = savedConfig.caching_enabled
         }
       }
 
@@ -111,9 +105,6 @@ export async function GET(request: NextRequest) {
               active: true
             })
           }
-          if (savedConfig.caching_enabled !== undefined) {
-            config.caching.enabled = savedConfig.caching_enabled
-          }
         }
 
         console.log(`[API] Loaded model config for user ${userId} from local file`)
@@ -141,9 +132,6 @@ export async function GET(request: NextRequest) {
               prompt: profile.preferences.systemPrompt,
               active: true
             })
-          }
-          if (profile.preferences.cachingEnabled !== undefined) {
-            config.caching.enabled = profile.preferences.cachingEnabled
           }
         }
 
