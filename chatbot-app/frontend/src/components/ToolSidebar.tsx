@@ -6,7 +6,7 @@ import { Tool } from '@/types/chat';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { useTheme } from 'next-themes';
-import { apiGet, apiPost, apiPut } from '@/lib/api-client';
+import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api-client';
 import {
   Sidebar,
   SidebarContent,
@@ -23,6 +23,7 @@ import { AddMcpServerDialog } from './AddMcpServerDialog';
 import { EditMcpServerDialog } from './EditMcpServerDialog';
 import { ModelConfigDialog } from './ModelConfigDialog';
 import { useGatewayTools } from '@/hooks/useGatewayTools';
+import toolsConfig from '@/config/tools-config.json';
 
 interface ToolSidebarProps {
   availableTools: Tool[];
@@ -99,11 +100,10 @@ export function ToolSidebar({ availableTools, onToggleTool, onNewChat, refreshTo
       );
 
       if (data.success && data.sessions) {
-        console.log('[ToolSidebar] Loaded sessions:', data.sessions);
         setChatSessions(data.sessions);
       }
     } catch (error) {
-      console.error('[ToolSidebar] Failed to load chat sessions:', error);
+      console.error('Failed to load chat sessions:', error);
     } finally {
       setIsLoadingSessions(false);
     }
@@ -203,8 +203,6 @@ export function ToolSidebar({ availableTools, onToggleTool, onNewChat, refreshTo
         },
       });
 
-      console.log('MCP server updated successfully:', result);
-
       // Refresh tools to reflect the changes
       await refreshTools();
 
@@ -227,11 +225,8 @@ export function ToolSidebar({ availableTools, onToggleTool, onNewChat, refreshTo
       );
 
       if (result.success) {
-        console.log(`✅ MCP server '${serverConfig.name}' added successfully`);
         // Refresh tools to show the new server
-        console.log('🔄 Refreshing tools to show new MCP server...');
         await refreshTools();
-        console.log('🔄 Tools refresh completed');
       } else {
         throw new Error(result.message || 'Failed to add MCP server');
       }
@@ -242,7 +237,7 @@ export function ToolSidebar({ availableTools, onToggleTool, onNewChat, refreshTo
   };
 
   const removeMcpServer = async (serverId: string) => {
-    console.log('Remove MCP server not implemented yet');
+    // Remove MCP server not implemented yet
   };
 
   const formatRelativeTime = (dateString: string) => {
@@ -264,26 +259,15 @@ export function ToolSidebar({ availableTools, onToggleTool, onNewChat, refreshTo
     // Prevent the click from triggering the session load
     e.stopPropagation();
 
-    console.log('[ToolSidebar] Deleting session:', sessionIdToDelete);
-
     try {
-      const response = await fetch(`/api/session/delete?session_id=${sessionIdToDelete}`, {
-        method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(sessionId && { 'X-Session-ID': sessionId })
+      const data = await apiDelete<{ success: boolean; error?: string }>(
+        `session/delete?session_id=${sessionIdToDelete}`,
+        {
+          headers: sessionId ? { 'X-Session-ID': sessionId } : {},
         }
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to delete session: ${response.status}`);
-      }
-
-      const data = await response.json();
+      );
 
       if (data.success) {
-        console.log('[ToolSidebar] Session deleted successfully');
-
         // Refresh session list
         await loadSessions();
 
@@ -295,7 +279,7 @@ export function ToolSidebar({ availableTools, onToggleTool, onNewChat, refreshTo
         throw new Error(data.error || 'Failed to delete session');
       }
     } catch (error) {
-      console.error('[ToolSidebar] Failed to delete session:', error);
+      console.error('Failed to delete session:', error);
       alert('Failed to delete session. Please try again.');
     }
   };
@@ -352,11 +336,8 @@ export function ToolSidebar({ availableTools, onToggleTool, onNewChat, refreshTo
                       session.sessionId === sessionId ? 'bg-sidebar-accent/50 ring-1 ring-primary/20' : ''
                     }`}
                     onClick={() => {
-                      console.log('[ToolSidebar] Session clicked:', session.sessionId);
                       if (loadSession) {
                         loadSession(session.sessionId);
-                      } else {
-                        console.error('[ToolSidebar] loadSession function is not provided');
                       }
                     }}
                   >
@@ -451,6 +432,47 @@ export function ToolSidebar({ availableTools, onToggleTool, onNewChat, refreshTo
                         </div>
                       </SidebarMenuItem>
                     ))}
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            )}
+
+            {/* Built-In Tools (from tools-config.json) */}
+            {toolsConfig.builtin_tools && toolsConfig.builtin_tools.length > 0 && (
+              <SidebarGroup>
+                <SidebarGroupLabel className="flex items-center justify-between">
+                  <div className="flex items-center">
+                    <Brain className="h-4 w-4 mr-2" />
+                    Built-In Tools
+                  </div>
+                </SidebarGroupLabel>
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    {toolsConfig.builtin_tools.map((tool) => {
+                      // Find matching tool in availableTools to get enabled state
+                      const matchedTool = availableTools.find(t => t.id === tool.id);
+                      const isEnabled = matchedTool?.enabled ?? tool.enabled;
+
+                      return (
+                        <SidebarMenuItem key={tool.id}>
+                          <div className="flex items-center justify-between p-2 rounded-md hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors duration-150">
+                            <div className="flex-1 min-w-0">
+                              <div className="font-medium text-sm text-sidebar-foreground truncate">
+                                {tool.icon} {tool.name}
+                              </div>
+                              <div className="text-xs text-sidebar-foreground/70 truncate">
+                                {tool.description}
+                              </div>
+                            </div>
+                            <Switch
+                              checked={isEnabled}
+                              onCheckedChange={() => onToggleTool(tool.id)}
+                              className="ml-2 flex-shrink-0"
+                            />
+                          </div>
+                        </SidebarMenuItem>
+                      );
+                    })}
                   </SidebarMenu>
                 </SidebarGroupContent>
               </SidebarGroup>
@@ -615,36 +637,43 @@ export function ToolSidebar({ availableTools, onToggleTool, onNewChat, refreshTo
                       <SidebarMenuItem key={target.id}>
                         <div className="flex items-center justify-between p-2 rounded-md hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors duration-150">
                           <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              <span className="text-base">{target.icon}</span>
-                              <div className="flex-1 min-w-0">
-                                <div className="font-medium text-sm text-sidebar-foreground truncate">
-                                  {target.name}
-                                </div>
-                                <div className="text-xs text-sidebar-foreground/70 truncate">
-                                  {target.description}
-                                </div>
-                                <div className="text-xs mt-1">
-                                  {target.available === true && (
-                                    <span className="text-green-600">● Available ({target.tools.length} tools)</span>
-                                  )}
-                                  {target.available === false && (
-                                    <span className="text-red-600">● Unavailable</span>
-                                  )}
-                                  {target.available === undefined && (
-                                    <span className="text-gray-500">● Checking...</span>
-                                  )}
-                                </div>
-                              </div>
+                            <div className="font-medium text-sm text-sidebar-foreground truncate">
+                              {target.name}
+                            </div>
+                            <div className="text-xs text-sidebar-foreground/70 truncate">
+                              {target.description}
+                            </div>
+                            <div className="text-xs mt-1">
+                              {target.available === true && (
+                                <span className="text-green-600">● Available ({target.tools.length} tools)</span>
+                              )}
+                              {target.available === false && (
+                                <span className="text-red-600">● Unavailable</span>
+                              )}
+                              {target.available === undefined && (
+                                <span className="text-gray-500">● Checking...</span>
+                              )}
                             </div>
                           </div>
                           <Switch
                             checked={target.enabled}
                             disabled={target.available === false}
                             onCheckedChange={() => {
+                              // Collect all tool IDs BEFORE toggle (to predict next state)
+                              const enabledToolIds: string[] = []
+                              gatewayTargets.forEach(t => {
+                                // Check if this target will be enabled after toggle
+                                const willBeEnabled = (t.id === target.id) ? !t.enabled : t.enabled
+                                if (willBeEnabled && t.tools) {
+                                  t.tools.forEach(tool => {
+                                    enabledToolIds.push(tool.id)
+                                  })
+                                }
+                              })
+
+                              // Toggle state and notify parent
                               toggleGatewayTarget(target.id)
-                              const enabledIds = gatewayTargets.filter(t => t.enabled || t.id === target.id).map(t => t.id)
-                              onGatewayToolsChange?.(enabledIds)
+                              onGatewayToolsChange?.(enabledToolIds)
                             }}
                             className="ml-2 flex-shrink-0"
                           />
@@ -661,75 +690,42 @@ export function ToolSidebar({ availableTools, onToggleTool, onNewChat, refreshTo
               </SidebarGroupContent>
             </SidebarGroup>
 
-            {/* MCP Servers */}
+            {/* AgentCore Runtime MCP Servers */}
             <SidebarGroup>
               <SidebarGroupLabel>
                 <div className="flex items-center justify-between w-full">
                   <div className="flex items-center">
                     <Server className="h-4 w-4 mr-2" />
-                    MCP Servers
-                  </div>
-                  <div className="flex items-center gap-1">
-                    {mcpServers.length > 0 && (
-                      <button
-                        onClick={() => toggleCategory('mcp')}
-                        className="text-xs px-2 py-0.5 rounded hover:bg-sidebar-accent transition-colors"
-                      >
-                        {mcpServers.every(s => availableTools.find(t => t.id === s.id)?.enabled) ? 'Disable All' : 'Enable All'}
-                      </button>
-                    )}
-                    <AddMcpServerDialog onAddServer={addMcpServer} />
+                    AgentCore Runtime MCP Servers
                   </div>
                 </div>
               </SidebarGroupLabel>
               <SidebarGroupContent>
                 <SidebarMenu>
-                  {mcpServers.map((server) => (
+                  {toolsConfig.agentcore_runtime_mcp.map((server) => (
                     <SidebarMenuItem key={server.id}>
-                      <div className="flex items-center justify-between p-2 rounded-md hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors duration-150 group">
+                      <div className="flex items-center justify-between p-2 rounded-md hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors duration-150">
                         <div className="flex-1 min-w-0">
                           <div className="font-medium text-sm text-sidebar-foreground truncate">
                             {server.name}
                           </div>
-                          <div className="text-xs text-sidebar-foreground truncate">
+                          <div className="text-xs text-sidebar-foreground/70 truncate">
                             {server.description}
                           </div>
                           <div className="text-xs mt-1">
-                            {server.connection_status === 'connected' && (
-                              <span className="text-green-600">● Connected</span>
-                            )}
-                            {server.connection_status === 'disconnected' && (
-                              <span className="text-red-600">● Disconnected</span>
-                            )}
-                            {server.connection_status === 'invalid' && (
-                              <span className="text-orange-600">● Invalid URL</span>
-                            )}
-                            {!server.connection_status && (
-                              <span className="text-gray-500">● Unknown</span>
-                            )}
+                            <span className="text-blue-600">● Available ({server.tools.length} tools)</span>
                           </div>
                         </div>
-                        <div className="flex items-center gap-1 ml-2">
+                        <div title="Coming soon - deploy via agent-blueprint/deploy.sh">
                           <Switch
-                            checked={server.enabled}
-                            onCheckedChange={() => toggleMcpServer(server.id)}
-                            className="flex-shrink-0"
-                          />
-                          <EditMcpServerDialog
-                            server={server}
-                            onUpdateServer={updateMcpServer}
-                            onDeleteServer={removeMcpServer}
+                            checked={false}
+                            disabled={true}
+                            className="ml-2 flex-shrink-0"
                           />
                         </div>
                       </div>
                     </SidebarMenuItem>
                   ))}
-                  {mcpServers.length === 0 && (
-                    <div className="text-center py-4 text-sidebar-foreground">
-                      <Server className="h-6 w-6 mx-auto mb-2 opacity-50" />
-                      <p className="text-xs">No MCP servers configured</p>
-                    </div>
-                  )}
                 </SidebarMenu>
               </SidebarGroupContent>
             </SidebarGroup>

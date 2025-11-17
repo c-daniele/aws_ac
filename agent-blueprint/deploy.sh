@@ -103,7 +103,9 @@ display_menu() {
     echo "  1) AgentCore Runtime      (Agent container on Bedrock AgentCore)"
     echo "  2) Frontend + BFF         (Next.js + CloudFront + ALB)"
     echo "  3) MCP Tools              (AgentCore Gateway + Lambda functions)"
-    echo "  4) Full Stack             (AgentCore + Frontend + MCPs)"
+    echo "  4) AgentCore Runtime A2A  (Report Writer Agent, etc.)"
+    echo "  5) Runtime + Frontend     (1 + 2 combined)"
+    echo "  6) Full Stack             (All components)"
     echo ""
     echo "  0) Exit"
     echo ""
@@ -326,6 +328,177 @@ deploy_mcp_servers() {
     log_info "AgentCore Gateway Stack deployment complete!"
 }
 
+# Deploy AgentCore Runtime A2A Agents
+deploy_agentcore_runtime_a2a() {
+    log_step "Deploying AgentCore Runtime A2A Agents..."
+    echo ""
+
+    log_info "Available A2A Agents:"
+    echo ""
+
+    # Check which A2A agents are available
+    AVAILABLE_SERVERS=()
+
+    if [ -d "agentcore-runtime-a2a-stack/report-writer" ]; then
+        AVAILABLE_SERVERS+=("report-writer")
+        echo "  1) report-writer     (Research report creation with charts via A2A)"
+    fi
+
+    if [ -d "archives/agentcore-mcp-farm/document-writer" ]; then
+        AVAILABLE_SERVERS+=("document-writer")
+        echo "  2) document-writer   (Markdown document creation)"
+    fi
+
+    if [ -d "archives/agentcore-mcp-farm/s3-iceberg" ]; then
+        AVAILABLE_SERVERS+=("s3-iceberg")
+        echo "  3) s3-iceberg        (S3 data lake queries)"
+    fi
+
+    echo ""
+    echo "  a) Deploy all available servers"
+    echo "  0) Back to main menu"
+    echo ""
+
+    read -p "Select server to deploy (0/1/2/3/a): " MCP_OPTION
+    echo ""
+
+    case $MCP_OPTION in
+        1)
+            if [[ " ${AVAILABLE_SERVERS[@]} " =~ " report-writer " ]]; then
+                deploy_report_writer
+            else
+                log_error "report-writer not found"
+                exit 1
+            fi
+            ;;
+        2)
+            if [[ " ${AVAILABLE_SERVERS[@]} " =~ " document-writer " ]]; then
+                deploy_document_writer
+            else
+                log_error "document-writer not found"
+                exit 1
+            fi
+            ;;
+        3)
+            if [[ " ${AVAILABLE_SERVERS[@]} " =~ " s3-iceberg " ]]; then
+                deploy_s3_iceberg
+            else
+                log_error "s3-iceberg not found"
+                exit 1
+            fi
+            ;;
+        a)
+            log_info "Deploying all available AgentCore Runtime A2A agents..."
+            echo ""
+            for server in "${AVAILABLE_SERVERS[@]}"; do
+                case $server in
+                    "report-writer")
+                        deploy_report_writer
+                        ;;
+                    "document-writer")
+                        deploy_document_writer
+                        ;;
+                    "s3-iceberg")
+                        deploy_s3_iceberg
+                        ;;
+                esac
+                echo ""
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                echo ""
+            done
+            ;;
+        0)
+            log_info "Returning to main menu..."
+            return
+            ;;
+        *)
+            log_error "Invalid option"
+            exit 1
+            ;;
+    esac
+}
+
+# Deploy Report Writer
+deploy_report_writer() {
+    log_step "Deploying Report Writer A2A Agent..."
+    echo ""
+
+    cd agentcore-runtime-a2a-stack/report-writer
+
+    # Check if deploy script exists
+    if [ ! -f "deploy.sh" ]; then
+        log_error "deploy.sh not found in report-writer"
+        exit 1
+    fi
+
+    # Make script executable
+    chmod +x deploy.sh
+
+    # Export AWS region
+    export AWS_REGION
+
+    # Run deployment
+    ./deploy.sh
+
+    cd ../..
+
+    log_info "Report Writer A2A agent deployment complete!"
+}
+
+# Deploy Document Writer
+deploy_document_writer() {
+    log_step "Deploying Document Writer MCP..."
+    echo ""
+
+    cd archives/agentcore-mcp-farm/document-writer
+
+    # Check if deploy script exists
+    if [ ! -f "deploy.sh" ]; then
+        log_error "deploy.sh not found in document-writer"
+        exit 1
+    fi
+
+    # Make script executable
+    chmod +x deploy.sh
+
+    # Export AWS region
+    export AWS_REGION
+
+    # Run deployment
+    ./deploy.sh
+
+    cd ../../..
+
+    log_info "Document Writer deployment complete!"
+}
+
+# Deploy S3 Iceberg
+deploy_s3_iceberg() {
+    log_step "Deploying S3 Iceberg MCP..."
+    echo ""
+
+    cd archives/agentcore-mcp-farm/s3-iceberg
+
+    # Check if deploy script exists
+    if [ ! -f "deploy.sh" ]; then
+        log_error "deploy.sh not found in s3-iceberg"
+        exit 1
+    fi
+
+    # Make script executable
+    chmod +x deploy.sh
+
+    # Export AWS region
+    export AWS_REGION
+
+    # Run deployment
+    ./deploy.sh
+
+    cd ../../..
+
+    log_info "S3 Iceberg deployment complete!"
+}
+
 # Main function
 main() {
     display_banner
@@ -334,7 +507,7 @@ main() {
     select_region
     display_menu
 
-    read -p "Select option (0-4): " OPTION
+    read -p "Select option (0-6): " OPTION
     echo ""
 
     case $OPTION in
@@ -362,7 +535,27 @@ main() {
             ;;
         4)
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "  Option 4: Full Stack"
+            echo "  Option 4: AgentCore Runtime A2A"
+            echo "  (Report Writer Agent, etc.)"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
+            deploy_agentcore_runtime_a2a
+            ;;
+        5)
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "  Option 5: Runtime + Frontend"
+            echo "  (AgentCore + BFF/Frontend)"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
+            deploy_agentcore_runtime
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
+            deploy_frontend
+            ;;
+        6)
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "  Option 6: Full Stack"
             echo "  (Runtime + Frontend + Gateway)"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo ""
@@ -381,7 +574,7 @@ main() {
             exit 0
             ;;
         *)
-            log_error "Invalid option. Please select 0-4."
+            log_error "Invalid option. Please select 0-6."
             exit 1
             ;;
     esac

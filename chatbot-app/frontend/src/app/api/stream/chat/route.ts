@@ -241,8 +241,15 @@ Your goal is to be helpful, accurate, and efficient in completing user requests 
 
             if (done) break
 
-            controller.enqueue(value)
-            lastActivityTime = Date.now()
+            // Check if controller is still open before enqueueing
+            try {
+              controller.enqueue(value)
+              lastActivityTime = Date.now()
+            } catch (err) {
+              // Controller closed (client disconnected) - stop processing
+              console.log('[BFF] Controller closed, stopping stream processing')
+              break
+            }
           }
 
         } catch (error) {
@@ -252,7 +259,12 @@ Your goal is to be helpful, accurate, and efficient in completing user requests 
             content: error instanceof Error ? error.message : 'Unknown error',
             metadata: { session_id: sessionId }
           })}\n\n`
-          controller.enqueue(encoder.encode(errorEvent))
+          try {
+            controller.enqueue(encoder.encode(errorEvent))
+          } catch (err) {
+            // Controller already closed, ignore
+            console.log('[BFF] Controller closed, cannot send error event')
+          }
         } finally {
           // Update session metadata after message processing
           try {

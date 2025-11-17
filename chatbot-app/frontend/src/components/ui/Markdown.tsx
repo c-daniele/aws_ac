@@ -156,10 +156,10 @@ const NonMemoizedMarkdown = ({
   const parts = useMemo(() => parseContentWithCharts(children), [children]);
   const remarkPlugins = useMemo(() => getRemarkPlugins(preserveLineBreaks), [preserveLineBreaks]);
 
-  const proseClass = `prose prose-${size} max-w-none dark:prose-invert prose-headings:font-semibold prose-headings:mt-4 prose-headings:mb-1.5 prose-p:leading-snug prose-p:text-base prose-li:py-0.5 prose-li:text-base prose-ul:my-2 prose-ol:my-2 prose-li:my-0 prose-ul:text-base prose-ol:text-base`;
+  const proseClass = `prose prose-${size} max-w-none dark:prose-invert prose-headings:font-semibold prose-headings:mt-4 prose-headings:mb-1.5 prose-p:leading-snug prose-p:text-base prose-li:py-0.5 prose-li:text-base prose-ul:my-2 prose-ol:my-2 prose-li:my-0 prose-ul:text-base prose-ol:text-base break-words`;
 
   return (
-    <div className={proseClass}>
+    <div className={proseClass} style={{ maxWidth: '100%', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
       {parts.map((part, index) => {
         if (part.type === 'chart' && part.chartData) {
           return (

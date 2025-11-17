@@ -74,16 +74,16 @@ def get_google_credentials() -> Optional[Dict[str, str]]:
         return _credentials_cache
 
     # Get from Secrets Manager
-    secret_arn = os.getenv("GOOGLE_CREDENTIALS_SECRET_ARN")
-    if not secret_arn:
-        logger.error("GOOGLE_CREDENTIALS_SECRET_ARN not set")
+    secret_name = os.getenv("GOOGLE_CREDENTIALS_SECRET_NAME")
+    if not secret_name:
+        logger.error("GOOGLE_CREDENTIALS_SECRET_NAME not set")
         return None
 
     try:
         session = boto3.session.Session()
         client = session.client(service_name='secretsmanager')
 
-        get_secret_value_response = client.get_secret_value(SecretId=secret_arn)
+        get_secret_value_response = client.get_secret_value(SecretId=secret_name)
 
         # Parse secret (stored as JSON)
         secret_str = get_secret_value_response['SecretString']

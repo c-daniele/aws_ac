@@ -13,7 +13,7 @@ from pathlib import Path
 from strands import Agent
 from strands.models import BedrockModel
 from strands.session.file_session_manager import FileSessionManager
-from strands.hooks import HookProvider, HookRegistry, BeforeModelCallEvent
+from strands.hooks import HookProvider, HookRegistry, BeforeModelCallEvent, BeforeToolCallEvent
 from streaming.event_processor import StreamEventProcessor
 
 # AgentCore Memory integration (optional, only for cloud deployment)
@@ -33,14 +33,40 @@ from local_tools.visualization import create_visualization
 from local_tools.web_search import ddg_web_search
 from local_tools.url_fetcher import fetch_url_content
 
+# Import built-in tools (AWS Bedrock-powered tools)
+from builtin_tools import generate_diagram_and_validate
+
 # Import Gateway MCP client
 from agent.gateway_mcp_client import get_gateway_client_if_enabled
 
 logger = logging.getLogger(__name__)
 
 
+class StopHook(HookProvider):
+    """Hook to handle session stop requests by cancelling tool execution"""
+
+    def __init__(self, session_manager):
+        self.session_manager = session_manager
+
+    def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
+        registry.add_callback(BeforeToolCallEvent, self.check_cancelled)
+
+    def check_cancelled(self, event: BeforeToolCallEvent) -> None:
+        """Cancel tool execution if session is stopped by user"""
+        if hasattr(self.session_manager, 'cancelled') and self.session_manager.cancelled:
+            tool_name = event.tool_use.get("name", "unknown")
+            logger.info(f"🚫 Cancelling tool execution: {tool_name} (session stopped by user)")
+            event.cancel_tool = "Session stopped by user"
+
+
 class ConversationCachingHook(HookProvider):
-    """Hook to add cache points to conversation history before model calls"""
+    """Hook to add cache points to conversation history before model calls
+
+    Strategy:
+    - Add cache points to last 2 messages only (previous + current)
+    - Remove cache points from older messages to prevent accumulation
+    - Maximum 4 cache points: system (1-2) + conversation (2)
+    """
 
     def __init__(self, enabled: bool = True):
         self.enabled = enabled
@@ -49,48 +75,65 @@ class ConversationCachingHook(HookProvider):
         registry.add_callback(BeforeModelCallEvent, self.add_conversation_cache_point)
 
     def add_conversation_cache_point(self, event: BeforeModelCallEvent) -> None:
-        """Add cache point to last message in conversation history"""
+        """Add cache points to last 2 messages in conversation history"""
         if not self.enabled:
             return
 
         messages = event.agent.messages
-        if not messages or len(messages) == 0:
+        if not messages or len(messages) <= 1:  # Need at least 2 messages
             return
 
-        # Find the last user or assistant message (skip tool messages)
-        target_index = -1
+        # Step 1: Find last 4 user or assistant messages (current 2 + previous 2)
+        # We need to remove cache points from previous 2 and add to current 2
+        message_indices = []
         for i in range(len(messages) - 1, -1, -1):
             msg = messages[i]
             msg_role = msg.get("role", "")
             if msg_role in ("user", "assistant"):
-                target_index = i
-                break
+                message_indices.append(i)
+                if len(message_indices) == 4:  # Get 4 messages (current 2 + previous 2)
+                    break
 
-        if target_index == -1:
+        if not message_indices:
             return
 
-        target_message = messages[target_index]
-        content = target_message.get("content", [])
+        # Reverse to get chronological order [oldest, ..., newest]
+        message_indices.reverse()
 
-        # Check if cache point already exists
-        if isinstance(content, list):
-            has_cache_point = any(
-                isinstance(item, dict) and "cachePoint" in item
-                for item in content
-            )
-            if has_cache_point:
-                return
+        # Step 2: Remove cache points from previous 2 messages (if they exist)
+        previous_indices = message_indices[:-2] if len(message_indices) > 2 else []
+        for idx in previous_indices:
+            msg = messages[idx]
+            content = msg.get("content", [])
+            if isinstance(content, list):
+                # Remove cache points
+                msg["content"] = [
+                    item for item in content
+                    if not (isinstance(item, dict) and "cachePoint" in item)
+                ]
 
-            # Add cache point to existing content list
-            target_message["content"] = content + [{"cachePoint": {"type": "default"}}]
-        elif isinstance(content, str):
-            # Convert string to list with cache point
-            target_message["content"] = [
-                {"text": content},
-                {"cachePoint": {"type": "default"}}
-            ]
+        # Step 3: Add cache points to last 2 messages
+        current_indices = message_indices[-2:] if len(message_indices) >= 2 else message_indices
+        for idx in current_indices:
+            target_message = messages[idx]
+            content = target_message.get("content", [])
 
-        logger.debug(f"✅ Added cache point to conversation history (message index {target_index})")
+            if isinstance(content, list):
+                # Add cache point if not already exists
+                has_cache_point = any(
+                    isinstance(item, dict) and "cachePoint" in item
+                    for item in content
+                )
+                if not has_cache_point:
+                    target_message["content"] = content + [{"cachePoint": {"type": "default"}}]
+            elif isinstance(content, str):
+                # Convert string to list with cache point
+                target_message["content"] = [
+                    {"text": content},
+                    {"cachePoint": {"type": "default"}}
+                ]
+
+        logger.debug(f"✅ Cache points: removed from {previous_indices}, added to {current_indices}")
 
 # Global stream processor instance
 _global_stream_processor = None
@@ -107,6 +150,7 @@ TOOL_REGISTRY = {
     "create_visualization": create_visualization,
     "ddg_web_search": ddg_web_search,
     "fetch_url_content": fetch_url_content,
+    "generate_diagram_and_validate": generate_diagram_and_validate,
 }
 
 
@@ -182,25 +226,34 @@ Your goal is to be helpful, accurate, and efficient in completing user requests 
                 }
             )
 
-            # Create AgentCore Memory Session Manager
-            self.session_manager = AgentCoreMemorySessionManager(
+            # Create Turn-based Session Manager (reduces API calls by 75%)
+            from agent.turn_based_session_manager import TurnBasedSessionManager
+
+            self.session_manager = TurnBasedSessionManager(
                 agentcore_memory_config=agentcore_memory_config,
                 region_name=aws_region
             )
 
             logger.info(f"✅ AgentCore Memory initialized: user_id={self.user_id}")
         else:
-            # Local development: Use file-based session manager
-            logger.info(f"💻 Local mode: Using FileSessionManager")
+            # Local development: Use file-based session manager with buffering wrapper
+            logger.info(f"💻 Local mode: Using FileSessionManager with buffering")
             sessions_dir = Path(__file__).parent.parent.parent / "sessions"
             sessions_dir.mkdir(exist_ok=True)
 
-            self.session_manager = FileSessionManager(
+            base_file_manager = FileSessionManager(
                 session_id=session_id,
                 storage_dir=str(sessions_dir)
             )
 
-            logger.info(f"✅ FileSessionManager initialized: {sessions_dir}")
+            # Wrap with local buffering manager for stop functionality
+            from agent.local_session_buffer import LocalSessionBuffer
+            self.session_manager = LocalSessionBuffer(
+                base_manager=base_file_manager,
+                session_id=session_id
+            )
+
+            logger.info(f"✅ FileSessionManager with buffering initialized: {sessions_dir}")
 
         self.create_agent()
 
@@ -296,8 +349,15 @@ Your goal is to be helpful, accurate, and efficient in completing user requests 
             # Get filtered tools based on user preferences
             tools = self.get_filtered_tools()
 
-            # Create conversation caching hook if enabled
+            # Create hooks
             hooks = []
+
+            # Add stop hook for session cancellation (always enabled)
+            stop_hook = StopHook(self.session_manager)
+            hooks.append(stop_hook)
+            logger.info("✅ Stop hook enabled (BeforeToolCallEvent)")
+
+            # Add conversation caching hook if enabled
             if self.caching_enabled:
                 conversation_hook = ConversationCachingHook(enabled=True)
                 hooks.append(conversation_hook)
@@ -362,10 +422,24 @@ Your goal is to be helpful, accurate, and efficient in completing user requests 
             ):
                 yield event
 
+            # Flush any buffered messages (turn-based session manager)
+            if hasattr(self.session_manager, 'flush'):
+                self.session_manager.flush()
+                logger.debug(f"💾 Session flushed after streaming complete")
+
         except Exception as e:
             import traceback
             logger.error(f"Error in stream_async: {e}")
             logger.error(f"Traceback: {traceback.format_exc()}")
+
+            # Emergency flush: save buffered messages before losing them
+            if hasattr(self.session_manager, 'flush'):
+                try:
+                    self.session_manager.flush()
+                    logger.warning(f"🚨 Emergency flush on error - saved {len(getattr(self.session_manager, 'pending_messages', []))} buffered messages")
+                except Exception as flush_error:
+                    logger.error(f"Failed to emergency flush: {flush_error}")
+
             # Send error event
             import json
             error_event = {

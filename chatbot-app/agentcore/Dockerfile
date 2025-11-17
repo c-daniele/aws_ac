@@ -1,5 +1,6 @@
 # Dockerfile for Agent Core - AWS Bedrock AgentCore Runtime
-FROM python:3.11-slim
+# Use AWS Public ECR to avoid Docker Hub rate limits
+FROM public.ecr.aws/docker/library/python:3.13-slim
 
 WORKDIR /app
 

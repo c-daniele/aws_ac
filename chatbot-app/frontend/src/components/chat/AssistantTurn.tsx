@@ -42,8 +42,9 @@ export const AssistantTurn: React.FC<AssistantTurnProps> = ({ messages, currentR
 
   let currentTextGroup = ''
   let currentTextImages: any[] = []
-  let textGroupStartId = 0
+  let textGroupStartId: string | number = 0
   let currentToolUseId: string | undefined = undefined
+  let textGroupCounter = 0 // Counter for unique keys
 
   const flushTextGroup = () => {
     if (currentTextGroup.trim()) {
@@ -51,29 +52,45 @@ export const AssistantTurn: React.FC<AssistantTurnProps> = ({ messages, currentR
         type: 'text',
         content: currentTextGroup,
         images: currentTextImages,
-        key: `text-group-${textGroupStartId}`,
+        key: `text-group-${textGroupCounter}-${textGroupStartId}`, // Use counter + id for uniqueness
         toolUseId: currentToolUseId
       })
       currentTextGroup = ''
       currentTextImages = []
       currentToolUseId = undefined
+      textGroupCounter++ // Increment counter
     }
   }
 
   sortedMessages.forEach((message) => {
-    // Check if message is a tool message
-    const isToolMsg = message.isToolMessage
+    // Check if message has tool executions
+    const hasToolExecutions = message.toolExecutions && message.toolExecutions.length > 0
 
-    if (isToolMsg) {
-      // Flush any accumulated text before adding tool message
+    if (hasToolExecutions) {
+      // Message has tool executions - render text first, then tools
+
+      // Add text if present
+      if (message.text) {
+        if (!currentTextGroup) {
+          textGroupStartId = typeof message.id === 'number' ? message.id : 0
+        }
+        currentTextGroup += message.text
+        if (message.images && message.images.length > 0) {
+          currentTextImages.push(...message.images)
+        }
+      }
+
+      // Flush text group before tool container
       flushTextGroup()
+
+      // Add tool execution container
       groupedContent.push({
         type: 'tool',
         content: message,
         key: `tool-${message.id}`
       })
     } else if (message.text) {
-      // Accumulate text messages
+      // Text-only message - accumulate
       if (!currentTextGroup) {
         textGroupStartId = typeof message.id === 'number' ? message.id : 0
       }

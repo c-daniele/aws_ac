@@ -51,7 +51,7 @@ export class LambdaStack extends cdk.Stack {
         timeout: 300,
         memorySize: 1024,
         environment: {
-          TAVILY_API_KEY_SECRET_ARN: tavilyApiKeySecret.secretArn,
+          TAVILY_API_KEY_SECRET_NAME: tavilyApiKeySecret.secretName,
           LOG_LEVEL: 'INFO',
         },
       },
@@ -85,7 +85,7 @@ export class LambdaStack extends cdk.Stack {
         timeout: 60,
         memorySize: 512,
         environment: {
-          GOOGLE_CREDENTIALS_SECRET_ARN: googleCredentialsSecret.secretArn,
+          GOOGLE_CREDENTIALS_SECRET_NAME: googleCredentialsSecret.secretName,
           LOG_LEVEL: 'INFO',
         },
       },

@@ -66,6 +66,18 @@ export async function GET(request: NextRequest) {
       enabled: enabledToolIds.includes(tool.id)
     }))
 
+    // Get builtin tools from config and map with user-specific enabled state
+    const builtinTools = (toolsConfig.builtin_tools || []).map((tool: any) => ({
+      id: tool.id,
+      name: tool.name,
+      description: tool.description,
+      category: tool.category,
+      icon: tool.icon,
+      type: 'builtin_tools',
+      tool_type: 'builtin',
+      enabled: enabledToolIds.includes(tool.id)
+    }))
+
     // Get gateway tools from config and map with user-specific enabled state
     const gatewayTargets = toolsConfig.gateway_targets || []
     const gatewayTools = gatewayTargets.flatMap((target: any) =>
@@ -83,7 +95,7 @@ export async function GET(request: NextRequest) {
     console.log(`[API] Returning tools for user ${userId} - ${enabledToolIds.length} enabled`)
 
     return NextResponse.json({
-      tools: localTools,
+      tools: [...localTools, ...builtinTools],
       mcp_servers: gatewayTools
     })
   } catch (error) {
@@ -97,6 +109,17 @@ export async function GET(request: NextRequest) {
       category: tool.category,
       type: 'local_tools',
       tool_type: 'local',
+      enabled: tool.enabled ?? true
+    }))
+
+    const builtinTools = (toolsConfig.builtin_tools || []).map((tool: any) => ({
+      id: tool.id,
+      name: tool.name,
+      description: tool.description,
+      category: tool.category,
+      icon: tool.icon,
+      type: 'builtin_tools',
+      tool_type: 'builtin',
       enabled: tool.enabled ?? true
     }))
 
@@ -114,7 +137,7 @@ export async function GET(request: NextRequest) {
     )
 
     return NextResponse.json({
-      tools: localTools,
+      tools: [...localTools, ...builtinTools],
       mcp_servers: gatewayTools
     })
   }

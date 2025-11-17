@@ -30,6 +30,7 @@ interface UseChatReturn {
   showProgressPanel: boolean
   toggleProgressPanel: () => void
   sendMessage: (e: React.FormEvent, files?: File[]) => Promise<void>
+  stopGeneration: () => void
   newChat: () => Promise<void>
   toggleTool: (toolId: string) => Promise<void>
   refreshTools: () => Promise<void>
@@ -132,7 +133,6 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
 
   // Callback when new session is created
   const handleSessionCreated = useCallback(() => {
-    console.log('[useChat] New session created, refreshing session list');
     // Call window refresh function if available
     if (typeof (window as any).__refreshSessionList === 'function') {
       (window as any).__refreshSessionList();
@@ -195,16 +195,12 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
     const lastSessionId = sessionStorage.getItem('chat-session-id')
 
     if (lastSessionId) {
-      console.log(`[useChat] Restoring last session: ${lastSessionId}`)
-
       loadSession(lastSessionId).catch(error => {
-        console.error('[useChat] Failed to restore session:', error)
         // Load failed, clear sessionStorage
         sessionStorage.removeItem('chat-session-id')
         setMessages([])
       })
     } else {
-      console.log('[useChat] No last session, starting with empty state')
       setMessages([])
     }
   }, []) // Empty dependency - run once on mount
@@ -329,6 +325,12 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
     setGatewayToolIds(enabledToolIds);
   }, []);
 
+  // Stop generation function
+  const stopGeneration = useCallback(() => {
+    cleanup()
+    setUIState(prev => ({ ...prev, isTyping: false }))
+  }, [cleanup])
+
   // Cleanup on unmount
   useEffect(() => {
     return cleanup
@@ -348,6 +350,7 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
     showProgressPanel: uiState.showProgressPanel,
     toggleProgressPanel,
     sendMessage,
+    stopGeneration,
     newChat,
     toggleTool,
     refreshTools,

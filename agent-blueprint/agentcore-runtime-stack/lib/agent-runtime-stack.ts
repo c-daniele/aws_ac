@@ -246,6 +246,22 @@ export class AgentRuntimeStack extends cdk.Stack {
       })
     )
 
+    // AgentCore Gateway Access (MCP Gateway integration)
+    executionRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'GatewayAccess',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'bedrock-agentcore:InvokeGateway',
+          'bedrock-agentcore:GetGateway',
+          'bedrock-agentcore:ListGateways',
+        ],
+        resources: [
+          `arn:aws:bedrock-agentcore:${this.region}:${this.account}:gateway/*`,
+        ],
+      })
+    )
+
     // Import existing VPC (if provided)
     let vpc: ec2.IVpc | undefined
     if (props?.vpcId) {
@@ -559,6 +575,57 @@ async function sendResponse(event, status, data, reason) {
       ],
     })
 
+    // ============================================================
+    // Step 6: Create Code Interpreter Custom (Shared Resource)
+    // ============================================================
+    // Code Interpreter is a shared resource used by:
+    // - Main AgentCore Runtime (bedrock_code_interpreter_tool)
+    // - Report Writer A2A Agent (chart generation)
+    // - Future agents (document-writer, etc.)
+    const codeInterpreterName = projectName.replace(/-/g, '_') + '_code_interpreter'
+    const codeInterpreter = new agentcore.CfnCodeInterpreterCustom(
+      this,
+      'CodeInterpreterCustom',
+      {
+        name: codeInterpreterName,
+        networkConfiguration: {
+          networkMode: 'SANDBOX', // Isolated sandbox environment without internet access
+        },
+        description: 'Shared Code Interpreter for all agents',
+      }
+    )
+
+    // Grant Runtime execution role permissions to use Code Interpreter
+    executionRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'CodeInterpreterAccess',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'bedrock-agentcore:CreateCodeInterpreter',
+          'bedrock-agentcore:StartCodeInterpreterSession',
+          'bedrock-agentcore:InvokeCodeInterpreter',
+          'bedrock-agentcore:StopCodeInterpreterSession',
+          'bedrock-agentcore:DeleteCodeInterpreter',
+          'bedrock-agentcore:ListCodeInterpreters',
+          'bedrock-agentcore:GetCodeInterpreter',
+          'bedrock-agentcore:GetCodeInterpreterSession',
+          'bedrock-agentcore:ListCodeInterpreterSessions',
+        ],
+        resources: [
+          `arn:aws:bedrock-agentcore:*:aws:code-interpreter/*`,
+          `arn:aws:bedrock-agentcore:${this.region}:${this.account}:code-interpreter/*`,
+        ],
+      })
+    )
+
+    // Store Code Interpreter ID in Parameter Store for other agents
+    new ssm.StringParameter(this, 'CodeInterpreterIdParameter', {
+      parameterName: `/${projectName}/${environment}/agentcore/code-interpreter-id`,
+      stringValue: codeInterpreter.attrCodeInterpreterId,
+      description: 'Shared Code Interpreter ID for all agents',
+      tier: ssm.ParameterTier.STANDARD,
+    })
+
     // Create Memory with short-term and long-term strategies using L1 construct (CfnMemory)
     const memoryName = projectName.replace(/-/g, '_') + '_memory'
     const memory = new agentcore.CfnMemory(this, 'AgentCoreMemory', {
@@ -741,6 +808,18 @@ async function sendResponse(event, status, data, reason) {
     new cdk.CfnOutput(this, 'MemoryName', {
       value: memory.name,
       description: 'AgentCore Memory Name',
+    })
+
+    new cdk.CfnOutput(this, 'CodeInterpreterId', {
+      value: codeInterpreter.attrCodeInterpreterId,
+      description: 'Shared Code Interpreter ID for all agents',
+      exportName: `${projectName}-code-interpreter-id`,
+    })
+
+    new cdk.CfnOutput(this, 'CodeInterpreterArn', {
+      value: codeInterpreter.attrCodeInterpreterArn,
+      description: 'Shared Code Interpreter ARN',
+      exportName: `${projectName}-code-interpreter-arn`,
     })
   }
 }

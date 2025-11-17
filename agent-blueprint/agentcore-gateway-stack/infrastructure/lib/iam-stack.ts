@@ -54,12 +54,17 @@ export class GatewayIamStack extends cdk.Stack {
     })
 
     // Secrets Manager read permissions
+    // Note: Using wildcard (*) suffix because AWS Secrets Manager automatically
+    // appends random 6-character suffix to secret ARNs (e.g., -aeb8Cc)
     this.lambdaRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'SecretsManagerAccess',
         effect: iam.Effect.ALLOW,
         actions: ['secretsmanager:GetSecretValue'],
-        resources: [this.tavilyApiKeySecret.secretArn, this.googleCredentialsSecret.secretArn],
+        resources: [
+          `${this.tavilyApiKeySecret.secretArn}*`,
+          `${this.googleCredentialsSecret.secretArn}*`
+        ],
       })
     )
 

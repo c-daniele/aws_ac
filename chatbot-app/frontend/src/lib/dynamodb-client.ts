@@ -26,10 +26,11 @@ import {
   sessionRecordToMetadata,
 } from './dynamodb-schema'
 
+// Use fallback for build time, will throw error at runtime if missing
 const AWS_REGION = process.env.AWS_REGION || 'us-west-2'
-const TABLE_NAME = process.env.DYNAMODB_TABLE || 'strands-agent-chatbot-users'
+const TABLE_NAME = process.env.DYNAMODB_USERS_TABLE || 'strands-agent-chatbot-users-v2'
 
-// Initialize DynamoDB client
+// Initialize DynamoDB client (lazy - only used at runtime)
 const dynamoClient = new DynamoDBClient({ region: AWS_REGION })
 
 // ============================================================
@@ -352,7 +353,7 @@ export async function getUserSessions(
         ':sessionPrefix': 'SESSION#',
       }),
       ScanIndexForward: false, // Descending order (newest first)
-      Limit: limit,
+      Limit: limit * 2, // Fetch more to account for filtering
     })
 
     const response = await dynamoClient.send(command)
@@ -366,15 +367,17 @@ export async function getUserSessions(
       return sessionRecordToMetadata(record)
     })
 
-    // Filter by status if provided
-    if (status) {
-      sessions = sessions.filter((s) => s.status === status)
-    }
+    // Filter by status - default to 'active' if not specified
+    const filterStatus = status || 'active'
+    sessions = sessions.filter((s) => s.status === filterStatus)
+
+    // Apply limit after filtering
+    sessions = sessions.slice(0, limit)
 
     // Sort by lastMessageAt descending
     sessions.sort((a, b) => new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime())
 
-    console.log(`[DynamoDB] Retrieved ${sessions.length} sessions for user ${userId}`)
+    console.log(`[DynamoDB] Retrieved ${sessions.length} ${filterStatus} sessions for user ${userId}`)
     return sessions
   } catch (error) {
     console.error('[DynamoDB] Error getting user sessions:', error)

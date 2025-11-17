@@ -27,3 +27,4 @@ ddgs>=9.0.0
 aws-opentelemetry-distro>=0.10.1
 
 # Note: MCP, Redis, DynamoDB will be added in Phase 2
+bedrock-agentcore

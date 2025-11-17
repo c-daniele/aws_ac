@@ -61,10 +61,9 @@ export function getUserSessions(
   const store = loadSessionStore()
   let sessions = store[userId] || []
 
-  // Filter by status if provided
-  if (status) {
-    sessions = sessions.filter((s) => s.status === status)
-  }
+  // Filter by status - default to 'active' if not specified
+  const filterStatus = status || 'active'
+  sessions = sessions.filter((s) => s.status === filterStatus)
 
   // Sort by lastMessageAt descending (newest first)
   sessions.sort((a, b) => new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime())
@@ -248,44 +247,14 @@ export function getSessionMessages(sessionId: string): any[] {
       const content = fs.readFileSync(filePath, 'utf-8')
       const messageData = JSON.parse(content)
 
-      // Extract text and tool information from content array
-      let text = ''
-      let toolUse = null
-      let toolResult = null
-
-      messageData.message.content.forEach((c: any) => {
-        if (c.text) {
-          text += c.text
-        } else if (c.toolUse) {
-          toolUse = {
-            toolUseId: c.toolUse.toolUseId,
-            name: c.toolUse.name,
-            input: c.toolUse.input,
-          }
-        } else if (c.toolResult) {
-          toolResult = {
-            toolUseId: c.toolResult.toolUseId,
-            content: c.toolResult.content,
-            status: c.toolResult.status,
-          }
-        }
-      })
-
-      const message = {
+      // Return in the same format as AgentCore Memory
+      // AgentCore Memory returns parsed.message which contains { role, content }
+      // Add id and timestamp for frontend compatibility
+      return {
+        ...messageData.message, // Contains role and content array
         id: `msg-${sessionId}-${index}`,
-        role: messageData.message.role.toLowerCase(), // "user" | "assistant"
-        content: text,
         timestamp: messageData.created_at || new Date().toISOString(),
-        ...(toolUse ? { toolUse } : {}),
-        ...(toolResult ? { toolResult } : {}),
       }
-
-      // Debug log
-      if (toolUse || toolResult) {
-        console.log(`[LocalSessionStore] Message ${index} has tool info:`, { toolUse, toolResult })
-      }
-
-      return message
     })
 
     console.log(`[LocalSessionStore] Loaded ${messages.length} messages`)

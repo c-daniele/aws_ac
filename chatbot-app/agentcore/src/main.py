@@ -53,12 +53,13 @@ if os.getenv('ENVIRONMENT', 'development') == 'development':
     )
 
 # Import routers
-from routers import health, chat, gateway_tools
+from routers import health, chat, gateway_tools, tools
 
 # Include routers
 app.include_router(health.router)
 app.include_router(chat.router)
 app.include_router(gateway_tools.router)
+app.include_router(tools.router)
 
 # Mount static file directories for serving generated content
 # These are created by tools (visualization, code interpreter, etc.)

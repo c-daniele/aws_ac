@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState, useEffect } from 'react'
-import { Message, Tool } from '@/types/chat'
+import { Message, Tool, ToolExecution } from '@/types/chat'
 import { StreamEvent, ChatUIState } from '@/types/events'
 import { getApiUrl } from '@/config/environment'
 import logger from '@/utils/logger'
@@ -50,12 +50,10 @@ export const useChatAPI = ({
     const lastSessionId = sessionStorage.getItem('chat-session-id')
 
     if (lastSessionId) {
-      console.log(`[useChatAPI] Restoring last session: ${lastSessionId}`)
       setSessionId(lastSessionId)
       sessionIdRef.current = lastSessionId
       // Note: loadSession will be called by useChat hook
     } else {
-      console.log('[useChatAPI] No last session, starting with empty state')
       setSessionId(null)
       sessionIdRef.current = null
     }
@@ -148,18 +146,15 @@ export const useChatAPI = ({
 
   const newChat = useCallback(async () => {
     try {
-      console.log('[useChatAPI] Starting new chat (lazy creation)')
-
       // Clear local state only - no server call
       setMessages([])
       setSessionId(null)
       sessionIdRef.current = null
       sessionStorage.removeItem('chat-session-id')
 
-      console.log('[useChatAPI] Chat cleared, new session will be created on first message')
       return true
     } catch (error) {
-      console.error('[useChatAPI] Error clearing chat:', error)
+      logger.error('Error clearing chat:', error)
       return false
     }
   }, [setMessages])
@@ -184,15 +179,15 @@ export const useChatAPI = ({
       // Use ref to get latest sessionId (avoids stale closure)
       const currentSessionId = sessionIdRef.current
 
-      // Extract enabled tools from current state
+      // Extract enabled LOCAL tools only (exclude gateway tools)
       const enabledToolIds = availableTools
-        .filter(tool => tool.enabled)
+        .filter(tool => tool.enabled && !tool.id.startsWith('gateway_'))
         .map(tool => tool.id)
 
-      // Combine with Gateway tool IDs
+      // Combine with Gateway tool IDs (from props)
       const allEnabledToolIds = [...enabledToolIds, ...gatewayToolIds]
 
-      logger.info(`Sending message with ${allEnabledToolIds.length} enabled tools (${enabledToolIds.length} local + ${gatewayToolIds.length} gateway)${files && files.length > 0 ? ` and ${files.length} files` : ''}:`, allEnabledToolIds)
+      logger.info(`Sending message with ${allEnabledToolIds.length} enabled tools (${enabledToolIds.length} local + ${gatewayToolIds.length} gateway)${files && files.length > 0 ? ` and ${files.length} files` : ''}`)
 
       if (files && files.length > 0) {
         // Use FormData for file uploads
@@ -243,7 +238,6 @@ export const useChatAPI = ({
       const responseSessionId = response.headers.get('X-Session-ID')
 
       if (responseSessionId && responseSessionId !== currentSessionId) {
-        console.log(`[useChatAPI] Session updated: ${currentSessionId} -> ${responseSessionId}`)
         setSessionId(responseSessionId)
         sessionIdRef.current = responseSessionId
         sessionStorage.setItem('chat-session-id', responseSessionId)
@@ -302,7 +296,6 @@ export const useChatAPI = ({
       const isNewSession = response.headers.get('X-Session-Is-New') === 'true'
 
       if (isNewSession) {
-        console.log(`[useChatAPI] New session created, refreshing session list`)
         logger.info(`New session created: ${responseSessionId || sessionId}`)
         // Refresh session list to show new session
         onSessionCreated?.()
@@ -332,14 +325,12 @@ export const useChatAPI = ({
 
   const loadSession = useCallback(async (newSessionId: string) => {
     try {
-      console.log(`[useChatAPI] Loading session: ${newSessionId}`)
       logger.info(`Loading session: ${newSessionId}`)
 
       const authHeaders = await getAuthHeaders()
 
       // Load conversation history from AgentCore Memory
       const url = getApiUrl(`conversation/history?session_id=${newSessionId}`)
-      console.log(`[useChatAPI] Fetching from URL: ${url}`)
 
       const response = await fetch(url, {
         method: 'GET',
@@ -349,48 +340,91 @@ export const useChatAPI = ({
         }
       })
 
-      console.log(`[useChatAPI] Response status: ${response.status}`)
-
       if (!response.ok) {
         throw new Error(`Failed to load session: ${response.status}`)
       }
 
       const data = await response.json()
-      console.log(`[useChatAPI] Response data:`, data)
 
       if (!data.success) {
         throw new Error(data.error || 'Failed to load conversation history')
       }
 
-      // BFF already merged toolUse + toolResult, just convert to UI format
+      // Process messages - content is now an array format from AgentCore
+      // First pass: collect all toolUse and toolResult across all messages
+      const toolUseMap = new Map<string, any>() // toolUseId -> toolUse
+      const toolResultMap = new Map<string, any>() // toolUseId -> toolResult
+
+      data.messages.forEach((msg: any) => {
+        if (Array.isArray(msg.content)) {
+          msg.content.forEach((item: any) => {
+            if (item.toolUse) {
+              toolUseMap.set(item.toolUse.toolUseId, item.toolUse)
+            } else if (item.toolResult) {
+              toolResultMap.set(item.toolResult.toolUseId, item.toolResult)
+            }
+          })
+        }
+      })
+
       const loadedMessages: Message[] = data.messages
         .filter((msg: any) => {
-          // Filter out empty messages
-          const hasContent = msg.content && msg.content.trim()
-          const hasToolExecutions = msg.toolExecutions && msg.toolExecutions.length > 0
-          return hasContent || hasToolExecutions
+          // Filter out messages that only contain toolResult (they'll be merged with toolUse)
+          if (Array.isArray(msg.content)) {
+            const hasOnlyToolResult = msg.content.every((item: any) => item.toolResult)
+            return !hasOnlyToolResult
+          }
+          return true
         })
         .map((msg: any, index: number) => {
-          console.log(`[useChatAPI] Processing message ${index}:`, {
-            role: msg.role,
-            isToolMessage: !!msg.isToolMessage,
-            hasToolExecutions: !!msg.toolExecutions,
-            content: msg.content?.substring(0, 50)
-          })
+          // Extract text and tool executions from content array
+          let text = ''
+          const toolExecutions: any[] = []
 
-          return {
-            id: msg.id || `${newSessionId}-${index}`,
-            text: msg.content || '',
-            sender: msg.role === 'user' ? 'user' : 'bot',
-            timestamp: new Date(msg.timestamp).toLocaleTimeString(),
-            ...(msg.toolExecutions && {
-              toolExecutions: msg.toolExecutions,
-              isToolMessage: msg.isToolMessage
+          if (Array.isArray(msg.content)) {
+            msg.content.forEach((item: any) => {
+              if (item.text) {
+                text += item.text
+              } else if (item.toolUse) {
+                // Find corresponding toolResult from the map
+                const toolResult = toolResultMap.get(item.toolUse.toolUseId)
+
+                // Convert toolResult.content array to string format
+                let toolResultString = ''
+                if (toolResult?.content && Array.isArray(toolResult.content)) {
+                  toolResultString = toolResult.content
+                    .map((c: any) => c.text || JSON.stringify(c))
+                    .join('\n')
+                }
+
+                const execution: ToolExecution = {
+                  id: item.toolUse.toolUseId,
+                  toolName: item.toolUse.name,
+                  toolInput: item.toolUse.input,
+                  reasoning: [],
+                  toolResult: toolResultString,
+                  isComplete: true,
+                  isExpanded: false
+                }
+
+                toolExecutions.push(execution)
+              }
             })
           }
-        })
 
-      console.log(`[useChatAPI] Loaded ${loadedMessages.length} messages from BFF`)
+          const messageObj = {
+            id: msg.id || `${newSessionId}-${index}`,
+            text: text,
+            sender: msg.role === 'user' ? 'user' : 'bot',
+            timestamp: msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString(),
+            ...(toolExecutions.length > 0 && {
+              toolExecutions: toolExecutions,
+              isToolMessage: true
+            })
+          }
+
+          return messageObj
+        })
 
       // Update messages and session ID
       setMessages(loadedMessages)
@@ -399,7 +433,6 @@ export const useChatAPI = ({
 
       logger.info(`Session loaded: ${newSessionId} with ${loadedMessages.length} messages`)
     } catch (error) {
-      console.error('[useChatAPI] Failed to load session:', error)
       logger.error('Failed to load session:', error)
       throw error
     }

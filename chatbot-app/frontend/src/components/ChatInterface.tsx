@@ -14,7 +14,7 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { SidebarTrigger, SidebarInset, useSidebar } from "@/components/ui/sidebar"
-import { Upload, Send, FileText, ImageIcon } from "lucide-react"
+import { Upload, Send, FileText, ImageIcon, Square } from "lucide-react"
 
 interface ChatInterfaceProps {
   mode: 'standalone' | 'embedded'
@@ -35,6 +35,7 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
     currentReasoning,
     toolProgress,
     sendMessage,
+    stopGeneration,
     newChat,
     toggleTool,
     refreshTools,
@@ -333,13 +334,23 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
               rows={1}
               style={{ minHeight: "48px" }}
             />
-            <Button
-              type="submit"
-              disabled={isTyping || (!inputMessage.trim() && selectedFiles.length === 0)}
-              className="h-12 px-6 gradient-primary hover:opacity-90 text-primary-foreground rounded-xl shadow-sm hover:shadow-md transition-all duration-200 disabled:opacity-50 gradient-hover"
-            >
-              <Send className="w-4 h-4" />
-            </Button>
+            {isTyping ? (
+              <Button
+                type="button"
+                onClick={stopGeneration}
+                className="h-12 px-6 bg-muted hover:bg-muted/80 text-foreground rounded-xl shadow-sm hover:shadow-md transition-all duration-200 border border-border"
+              >
+                <Square className="w-4 h-4" />
+              </Button>
+            ) : (
+              <Button
+                type="submit"
+                disabled={!inputMessage.trim() && selectedFiles.length === 0}
+                className="h-12 px-6 gradient-primary hover:opacity-90 text-primary-foreground rounded-xl shadow-sm hover:shadow-md transition-all duration-200 disabled:opacity-50 gradient-hover"
+              >
+                <Send className="w-4 h-4" />
+              </Button>
+            )}
           </div>
         </form>
       </SidebarInset>

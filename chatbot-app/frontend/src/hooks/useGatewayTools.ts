@@ -104,7 +104,14 @@ export const useGatewayTools = (): UseGatewayToolsReturn => {
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+        // 404 or 500 means BFF endpoint doesn't exist yet (not deployed)
+        // This is expected during incremental deployment
+        console.warn('[useGatewayTools] BFF endpoint not available:', response.status);
+        setGatewayTargets(prev => prev.map(target => ({
+          ...target,
+          available: false
+        })));
+        return;
       }
 
       const data = await response.json();

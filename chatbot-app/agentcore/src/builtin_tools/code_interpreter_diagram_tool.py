@@ -1,0 +1,250 @@
+"""Diagram generation tool using Bedrock Code Interpreter
+
+This tool generates diagrams and charts by executing Python code in AWS Bedrock Code Interpreter.
+It supports matplotlib, seaborn, pandas, and numpy for creating visualizations.
+"""
+
+from strands import tool
+from typing import Dict, Any
+import logging
+import os
+
+logger = logging.getLogger(__name__)
+
+
+@tool
+def generate_diagram_and_validate(
+    python_code: str,
+    diagram_filename: str
+) -> Dict[str, Any]:
+    """Generate diagrams and charts using Python code via Bedrock Code Interpreter.
+
+    This tool executes Python code in a sandboxed environment and returns the generated
+    diagram as raw bytes in Strands ToolResult format for proper display.
+
+    Available libraries: matplotlib.pyplot, seaborn, pandas, numpy
+
+    Args:
+        python_code: Complete Python code for diagram generation.
+                    Must include: plt.savefig(diagram_filename, dpi=300, bbox_inches='tight')
+
+                    Example:
+                    ```python
+                    import matplotlib.pyplot as plt
+                    import numpy as np
+
+                    x = np.linspace(0, 10, 100)
+                    y = np.sin(x)
+
+                    plt.figure(figsize=(10, 6))
+                    plt.plot(x, y, 'b-', linewidth=2)
+                    plt.title('Sine Wave', fontsize=14)
+                    plt.xlabel('X axis')
+                    plt.ylabel('Y axis')
+                    plt.grid(True, alpha=0.3)
+                    plt.savefig('sine_wave.png', dpi=300, bbox_inches='tight')
+                    ```
+
+        diagram_filename: PNG filename (required). Must end with .png
+                         Example: "sales_chart.png", "architecture_diagram.png"
+
+    Returns:
+        ToolResult with multimodal content:
+        {
+            "content": [
+                {"text": "✅ Diagram generated: ..."},
+                {"image": {"format": "png", "source": {"bytes": b"..."}}}
+            ],
+            "status": "success"
+        }
+
+    Note:
+        - The generated diagram is returned as raw PNG bytes (not base64)
+        - Use figsize=(10, 6) or larger for readable diagrams
+        - Include proper labels, titles, and legends
+        - Use high DPI (300) for crisp output
+    """
+    from bedrock_agentcore.tools.code_interpreter_client import CodeInterpreter
+
+    # Validate diagram_filename
+    if not diagram_filename or not diagram_filename.endswith('.png'):
+        return {
+            "content": [{
+                "text": f"❌ Invalid filename. Must end with .png (e.g., 'my_diagram.png')\nYou provided: {diagram_filename}"
+            }],
+            "status": "error"
+        }
+
+    try:
+        logger.info(f"Generating diagram via Code Interpreter: {diagram_filename}")
+
+        # 1. Initialize Code Interpreter
+        region = os.getenv('AWS_REGION', 'us-west-2')
+        code_interpreter = CodeInterpreter(region)
+        code_interpreter.start()
+
+        logger.info(f"Code Interpreter started - executing code for {diagram_filename}")
+
+        # 2. Execute Python code
+        response = code_interpreter.invoke("executeCode", {
+            "code": python_code,
+            "language": "python",
+            "clearContext": False
+        })
+
+        logger.info(f"Code execution completed for {diagram_filename}")
+
+        # 3. Check for errors
+        execution_success = False
+        execution_output = ""
+
+        for event in response.get("stream", []):
+            result = event.get("result", {})
+            if result.get("isError", False):
+                error_msg = result.get("structuredContent", {}).get("stderr", "Unknown error")
+                logger.error(f"Code execution failed: {error_msg[:200]}")
+                code_interpreter.stop()
+
+                return {
+                    "content": [{
+                        "text": f"""❌ Python code execution failed
+
+**Error Output:**
+```
+{error_msg[:500]}
+```
+
+**Your Code:**
+```python
+{python_code[:500]}{'...' if len(python_code) > 500 else ''}
+```
+
+Please fix the error and try again."""
+                    }],
+                    "status": "error"
+                }
+
+            execution_output = result.get("structuredContent", {}).get("stdout", "")
+            execution_success = True
+
+        if not execution_success:
+            logger.warning("Code Interpreter: No result returned")
+            code_interpreter.stop()
+            return {
+                "content": [{
+                    "text": """❌ No result from Bedrock Code Interpreter
+
+The code was sent but no result was returned.
+Please try again or simplify your code."""
+                }],
+                "status": "error"
+            }
+
+        logger.info("Code execution successful, downloading file...")
+
+        # 4. Download the generated file
+        file_content = None
+        try:
+            download_response = code_interpreter.invoke("readFiles", {"paths": [diagram_filename]})
+
+            for event in download_response.get("stream", []):
+                result = event.get("result", {})
+                if "content" in result and len(result["content"]) > 0:
+                    content_block = result["content"][0]
+                    # File content can be in 'data' (bytes) or 'resource.blob'
+                    if "data" in content_block:
+                        file_content = content_block["data"]
+                    elif "resource" in content_block and "blob" in content_block["resource"]:
+                        file_content = content_block["resource"]["blob"]
+
+                    if file_content:
+                        break
+
+            if not file_content:
+                raise Exception(f"No file content returned for {diagram_filename}")
+
+            logger.info(f"Successfully downloaded diagram: {diagram_filename} ({len(file_content)} bytes)")
+
+        except Exception as e:
+            logger.error(f"Failed to download diagram file: {str(e)}")
+            code_interpreter.stop()
+
+            # List available files for debugging
+            available_files = []
+            try:
+                file_list_response = code_interpreter.invoke("listFiles", {"path": ""})
+                for event in file_list_response.get("stream", []):
+                    result = event.get("result", {})
+                    if "content" in result:
+                        for item in result.get("content", []):
+                            if item.get("description") == "File":
+                                filename = item.get("name", "")
+                                if filename:
+                                    available_files.append(filename)
+            except:
+                pass
+
+            return {
+                "content": [{
+                    "text": f"""❌ Failed to download diagram file
+
+**Error:** Could not download '{diagram_filename}'
+**Exception:** {str(e)}
+
+**Available files in session:** {', '.join(available_files) if available_files else 'None'}
+
+**Fix:** Make sure your code creates the file with the exact filename:
+```python
+plt.savefig('{diagram_filename}', dpi=300, bbox_inches='tight')
+```"""
+                }],
+                "status": "error"
+            }
+
+        finally:
+            code_interpreter.stop()
+
+        # 5. Return ToolResult in Strands SDK format
+        file_size_kb = len(file_content) / 1024
+
+        logger.info(f"Diagram successfully generated and encoded: {file_size_kb:.1f} KB")
+
+        # Return ToolResult with ToolResultContent list
+        from strands.types.tools import ToolResult
+
+        return {
+            "content": [
+                {
+                    "text": f"✅ Diagram generated successfully: {diagram_filename} ({file_size_kb:.1f} KB)"
+                },
+                {
+                    "image": {
+                        "format": "png",
+                        "source": {
+                            "bytes": file_content  # Raw bytes, not base64
+                        }
+                    }
+                }
+            ],
+            "status": "success"
+        }
+
+    except Exception as e:
+        import traceback
+        logger.error(f"Diagram generation failed: {str(e)}")
+
+        from strands.types.tools import ToolResult
+
+        return {
+            "content": [{
+                "text": f"""❌ Failed to generate diagram
+
+**Error:** {str(e)}
+
+**Traceback:**
+```
+{traceback.format_exc()[:500]}
+```"""
+            }],
+            "status": "error"
+        }

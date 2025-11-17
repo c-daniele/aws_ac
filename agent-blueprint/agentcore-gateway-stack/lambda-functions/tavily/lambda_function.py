@@ -68,16 +68,16 @@ def get_tavily_api_key() -> Optional[str]:
         return api_key
 
     # Get from Secrets Manager
-    secret_arn = os.getenv("TAVILY_API_KEY_SECRET_ARN")
-    if not secret_arn:
-        logger.error("TAVILY_API_KEY_SECRET_ARN not set")
+    secret_name = os.getenv("TAVILY_API_KEY_SECRET_NAME")
+    if not secret_name:
+        logger.error("TAVILY_API_KEY_SECRET_NAME not set")
         return None
 
     try:
         session = boto3.session.Session()
         client = session.client(service_name='secretsmanager')
 
-        get_secret_value_response = client.get_secret_value(SecretId=secret_arn)
+        get_secret_value_response = client.get_secret_value(SecretId=secret_name)
 
         # Parse secret (it's stored as plain string, not JSON)
         secret = get_secret_value_response['SecretString']
@@ -131,8 +131,15 @@ def tavily_search(params: Dict[str, Any]) -> Dict[str, Any]:
             timeout=30
         )
 
-        if response.status_code != 200:
-            return error_response(f"Tavily API error: {response.status_code}")
+        # Handle response codes with detailed error messages
+        if response.status_code == 401:
+            return error_response("Invalid Tavily API key")
+        elif response.status_code == 429:
+            return error_response("Tavily API rate limit exceeded")
+        elif response.status_code != 200:
+            error_details = response.text
+            logger.error(f"Tavily API error {response.status_code}: {error_details}")
+            return error_response(f"Tavily API error: {response.status_code} - {error_details}")
 
         search_results = response.json()
 
@@ -198,8 +205,15 @@ def tavily_extract(params: Dict[str, Any]) -> Dict[str, Any]:
             timeout=30
         )
 
-        if response.status_code != 200:
-            return error_response(f"Tavily API error: {response.status_code}")
+        # Handle response codes with detailed error messages
+        if response.status_code == 401:
+            return error_response("Invalid Tavily API key")
+        elif response.status_code == 429:
+            return error_response("Tavily API rate limit exceeded")
+        elif response.status_code != 200:
+            error_details = response.text
+            logger.error(f"Tavily API error {response.status_code}: {error_details}")
+            return error_response(f"Tavily API error: {response.status_code} - {error_details}")
 
         extract_results = response.json()
 

@@ -150,9 +150,9 @@ export const JsonDisplay: React.FC<JsonDisplayProps> = ({
       )}
       
       {/* JSON Content */}
-      <div className="p-3" style={{ maxWidth: '100%', overflow: 'hidden' }}>
+      <div className="p-3 overflow-x-auto" style={{ maxWidth: '100%' }}>
         <div className={`font-mono text-xs leading-relaxed ${needsTruncation && !isExpanded ? 'max-h-48 overflow-hidden' : ''}`}>
-          <pre className="whitespace-pre-wrap" style={{ maxWidth: '100%', overflow: 'auto', wordBreak: 'break-all' }}>
+          <pre className="whitespace-pre-wrap break-words" style={{ maxWidth: '100%', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
             {highlightedContent}
           </pre>
         </div>

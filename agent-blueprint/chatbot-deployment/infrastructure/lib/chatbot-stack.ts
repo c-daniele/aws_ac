@@ -14,6 +14,7 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as codebuild from 'aws-cdk-lib/aws-codebuild';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 
 export interface ChatbotStackProps extends cdk.StackProps {
@@ -72,12 +73,16 @@ export class ChatbotStack extends cdk.Stack {
       ? dynamodb.Table.fromTableName(
           this,
           'ChatbotUsersTable',
-          `${projectName}-users`
+          `${projectName}-users-v2`
         )
       : new dynamodb.Table(this, 'ChatbotUsersTable', {
-          tableName: `${projectName}-users`,
+          tableName: `${projectName}-users-v2`,
           partitionKey: {
             name: 'userId',
+            type: dynamodb.AttributeType.STRING
+          },
+          sortKey: {
+            name: 'sk',
             type: dynamodb.AttributeType.STRING
           },
           billingMode: dynamodb.BillingMode.PAY_PER_REQUEST, // On-demand pricing
@@ -505,7 +510,7 @@ async function sendResponse(event, status, data, reason) {
       })
     );
 
-    // Add Parameter Store permissions to fetch AgentCore Runtime ARN
+    // Add Parameter Store permissions to fetch AgentCore Runtime ARN and MCP Gateway URL
     frontendTaskDefinition.addToTaskRolePolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
@@ -515,6 +520,7 @@ async function sendResponse(event, status, data, reason) {
         ],
         resources: [
           `arn:aws:ssm:${this.region}:${this.account}:parameter/${projectName}/${environment}/agentcore/*`,
+          `arn:aws:ssm:${this.region}:${this.account}:parameter/${projectName}/${environment}/mcp/*`,
           `arn:aws:ssm:${this.region}:${this.account}:parameter/mcp/endpoints/*`
         ]
       })
@@ -556,6 +562,37 @@ async function sendResponse(event, status, data, reason) {
       })
     );
 
+    // Add AgentCore Gateway Access (MCP Gateway integration)
+    frontendTaskDefinition.addToTaskRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'GatewayAccess',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'bedrock-agentcore:InvokeGateway',
+          'bedrock-agentcore:GetGateway',
+          'bedrock-agentcore:ListGateways'
+        ],
+        resources: [
+          `arn:aws:bedrock-agentcore:${this.region}:${this.account}:gateway/*`
+        ]
+      })
+    );
+
+    // Add AgentCore Memory Access (for conversation history)
+    frontendTaskDefinition.addToTaskRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'AgentCoreMemoryAccess',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'bedrock-agentcore:ListEvents',
+          'bedrock-agentcore:GetEvent'
+        ],
+        resources: [
+          `arn:aws:bedrock-agentcore:${this.region}:${this.account}:memory/*`
+        ]
+      })
+    );
+
     // Add CloudWatch permissions for logging
     frontendTaskDefinition.addToTaskRolePolicy(
       new iam.PolicyStatement({
@@ -586,6 +623,19 @@ async function sendResponse(event, status, data, reason) {
       DYNAMODB_USERS_TABLE: usersTable.tableName,
       DYNAMODB_SESSIONS_TABLE: sessionsTable.tableName,
     };
+
+    // Add AgentCore Memory ID from SSM Parameter Store (for conversation history)
+    try {
+      const memoryIdParam = ssm.StringParameter.fromStringParameterName(
+        this,
+        'MemoryIdParameter',
+        `/${projectName}/${environment}/agentcore/memory-id`
+      );
+      frontendEnvironment.MEMORY_ID = memoryIdParam.stringValue;
+      console.log('[ChatbotStack] Memory ID will be fetched from Parameter Store');
+    } catch (error) {
+      console.log('[ChatbotStack] Memory ID not available (AgentCore Runtime not deployed yet)');
+    }
 
     // Add CORS origins configuration for frontend CSP
     const frontendCorsOrigins = process.env.CORS_ORIGINS;

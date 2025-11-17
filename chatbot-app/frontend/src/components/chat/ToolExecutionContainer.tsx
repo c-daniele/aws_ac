@@ -365,10 +365,10 @@ export const ToolExecutionContainer: React.FC<ToolExecutionContainerProps> = ({ 
         
         return (
           <div key={toolExecution.id} className={`${
-            compact 
-              ? "bg-card/80 rounded-md border border-border/60" 
+            compact
+              ? "bg-card/80 rounded-md border border-border/60"
               : "bg-card/80 rounded-md border border-border shadow-sm"
-          } overflow-hidden`} style={{ maxWidth: '100%', width: '100%' }}>
+          } overflow-hidden break-words`} style={{ maxWidth: '100%', width: '100%', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
             {/* Tool Header - More Compact */}
             <button
               onClick={() => toggleToolExpansion(toolExecution.id)}
@@ -403,7 +403,7 @@ export const ToolExecutionContainer: React.FC<ToolExecutionContainerProps> = ({ 
             {/* Tool Content */}
             {isExpanded && (
               <div className={`border-t ${compact ? "border-border/60 bg-background/50" : "border-primary/20 bg-background/70"} backdrop-blur-sm`}>
-                <div className={`${compact ? "p-3" : "p-4"} min-w-0 max-w-full overflow-hidden`}>
+                <div className={`${compact ? "p-3" : "p-4"} min-w-0 max-w-full overflow-x-auto break-words`} style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
                   {/* Tool Input */}
                   {toolExecution.toolInput !== undefined && (
                     <div className={compact ? "mb-4" : "mb-6"}>
@@ -412,9 +412,9 @@ export const ToolExecutionContainer: React.FC<ToolExecutionContainerProps> = ({ 
                         <h4 className="text-sm font-semibold text-foreground">Input Parameters</h4>
                       </div>
                       {toolExecution.toolInput && Object.keys(toolExecution.toolInput).length > 0 ? (
-                        <div className="bg-background rounded-lg border border-border" style={{ maxWidth: '100%', width: '100%' }}>
-                          <div className="p-3" style={{ maxWidth: '100%', overflow: 'hidden' }}>
-                            <JsonDisplay 
+                        <div className="bg-background rounded-lg border border-border overflow-x-auto" style={{ maxWidth: '100%', width: '100%' }}>
+                          <div className="p-3 break-words" style={{ maxWidth: '100%', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
+                            <JsonDisplay
                               data={toolExecution.toolInput}
                               maxLines={6}
                               label="Parameters"
@@ -422,7 +422,7 @@ export const ToolExecutionContainer: React.FC<ToolExecutionContainerProps> = ({ 
                           </div>
                         </div>
                       ) : (
-                        <div className="bg-background rounded-lg border border-border p-3" style={{ maxWidth: '100%', width: '100%' }}>
+                        <div className="bg-background rounded-lg border border-border p-3 break-words" style={{ maxWidth: '100%', width: '100%', wordBreak: 'break-word' }}>
                           <div className="text-sm text-muted-foreground italic">
                             No input parameters (this tool takes no arguments)
                           </div>
@@ -438,9 +438,9 @@ export const ToolExecutionContainer: React.FC<ToolExecutionContainerProps> = ({ 
                         <Brain className="h-4 w-4 text-secondary" />
                         <h4 className="text-sm font-semibold text-foreground">AI Reasoning Process</h4>
                       </div>
-                      <div className="bg-background rounded-lg border-l-4 border-secondary" style={{ maxWidth: '100%', width: '100%' }}>
-                        <div className="p-3" style={{ maxWidth: '100%', overflow: 'hidden' }}>
-                          <JsonDisplay 
+                      <div className="bg-background rounded-lg border-l-4 border-secondary overflow-x-auto" style={{ maxWidth: '100%', width: '100%' }}>
+                        <div className="p-3 break-words" style={{ maxWidth: '100%', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
+                          <JsonDisplay
                             data={toolExecution.reasoningText}
                             maxLines={5}
                             label="Reasoning"
@@ -468,8 +468,8 @@ export const ToolExecutionContainer: React.FC<ToolExecutionContainerProps> = ({ 
                           </button>
                         )}
                       </div>
-                      <div className="bg-background rounded-lg border-l-4 border-green-500/30 dark:border-green-400/30" style={{ maxWidth: '100%', width: '100%' }}>
-                        <div className="p-3" style={{ maxWidth: '100%', overflow: 'hidden' }}>
+                      <div className="bg-background rounded-lg border-l-4 border-green-500/30 dark:border-green-400/30 overflow-x-auto" style={{ maxWidth: '100%', width: '100%' }}>
+                        <div className="p-3 break-words" style={{ maxWidth: '100%', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
                           {containsMarkdown(toolExecution.toolResult) ? (
                             <Markdown size="sm" sessionId={sessionId}>{toolExecution.toolResult}</Markdown>
                           ) : (

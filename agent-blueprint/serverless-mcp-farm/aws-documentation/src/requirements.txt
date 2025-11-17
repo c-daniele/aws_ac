@@ -1,6 +1,0 @@
-awslabs-mcp-lambda-handler
-markdownify
-httpx
-loguru
-beautifulsoup4
-pydantic

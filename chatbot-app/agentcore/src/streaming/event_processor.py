@@ -26,8 +26,6 @@ class StreamEventProcessor:
         
         if self.observability_enabled:
             self._init_metrics()
-            
-        self._setup_progress_emitter()
     
     def _init_metrics(self):
         """Initialize OpenTelemetry metrics for streaming"""
@@ -52,79 +50,6 @@ class StreamEventProcessor:
         import logging
         logger = logging.getLogger(__name__)
         logger.info("OpenTelemetry metrics initialized for StreamEventProcessor")
-    
-    def _setup_progress_emitter(self):
-        """Set up the progress event emitter for tools and connect to progress_channel"""
-        def emit_progress_event(context: str, executor: str, session_id: str, step: str, message: str, 
-                              progress: float = None, metadata: dict = None):
-            """Emit progress events to main stream"""
-            progress_data = {
-                "toolId": context,
-                "sessionId": session_id,
-                "step": step,
-                "message": message,
-                "progress": progress,
-                "timestamp": self._get_current_timestamp(),
-                "metadata": metadata or {}
-            }
-            
-            # Create progress event and add to immediate events queue
-            event = self.formatter.create_progress_event(progress_data)
-            self.pending_events.append(event)
-            
-            # Trigger immediate processing if we have an active stream
-            if hasattr(self, '_immediate_event_callback') and self._immediate_event_callback:
-                try:
-                    self._immediate_event_callback(event)
-                except Exception as e:
-                    # Don't let callback errors break the progress emission
-                    import logging
-                    logger = logging.getLogger(__name__)
-                    logger.debug(f"Error in immediate event callback: {e}")
-        
-        self._progress_emitter = emit_progress_event
-    
-    def _connect_progress_channel(self):
-        """Connect external progress_channel to main stream for unified progress handling"""
-        import logging
-        logger = logging.getLogger(__name__)
-        
-        try:
-            from routers.tool_events import tool_events_channel as progress_channel
-            # Connect tool_events_channel to main stream
-            logger.info("Connecting tool_events_channel to main stream")
-            
-            # Override progress_channel's broadcast method to forward to main stream
-            original_broadcast = progress_channel.broadcast
-            
-            async def unified_broadcast(event):
-                """Forward progress events to main stream while maintaining original functionality"""
-                await original_broadcast(event)
-                
-                if hasattr(self, '_immediate_event_callback') and self._immediate_event_callback:
-                    try:
-                        event_type = event.get('type')
-                        if event_type == 'progress_update':
-                            main_stream_event = self.formatter.create_progress_event({
-                                "toolId": event.get('context'),
-                                "sessionId": event.get('sessionId'),  
-                                "step": event.get('step'),
-                                "message": event.get('message'),
-                                "progress": event.get('progress'),
-                                "timestamp": event.get('timestamp'),
-                                "metadata": event.get('metadata', {})
-                            })
-                            self._immediate_event_callback(main_stream_event)
-                    except Exception as e:
-                        logger.error(f"Error forwarding progress to main stream: {e}")
-            
-            progress_channel.broadcast = unified_broadcast
-            logger.info("Progress channel connected to main stream")
-            
-        except ImportError as e:
-            logger.error(f"Progress channel not available for unified streaming: {e}")
-        except Exception as e:
-            logger.error(f"Unexpected error connecting progress channel: {e}")
     
     def _get_current_timestamp(self) -> str:
         """Get current timestamp in ISO format"""
@@ -341,12 +266,7 @@ Analysis completed successfully. The detailed insights have been generated based
             logger = logging.getLogger(__name__)
             logger.warning(f"Could not load tools config: {e}")
             return False
-    
-    def get_progress_emitter(self):
-        """Get the progress emitter function for tools to use"""
-        return getattr(self, '_progress_emitter', None)
-    
-    
+
     async def process_stream(self, agent, message: str, file_paths: list = None, session_id: str = None) -> AsyncGenerator[str, None]:
         """Process streaming events from agent with proper error handling and event separation"""
 
@@ -372,22 +292,31 @@ Analysis completed successfully. The detailed insights have been generated based
             self._active_streams = set()
 
         self._active_streams.add(stream_id)
-        
+
         if not agent:
             yield self.formatter.create_error_event("Agent not available - please configure AWS credentials for Bedrock")
             return
-        
+
         stream_iterator = None
         try:
             multimodal_message = self._create_multimodal_message(message, file_paths)
-            
+
             # Initialize streaming
             yield self.formatter.create_init_event()
-            
+
             stream_iterator = agent.stream_async(multimodal_message)
 
             # Note: Keepalive is handled at the router level (chat.py) via stream_with_keepalive wrapper
             async for event in stream_iterator:
+                # Check if session was cancelled (stop button clicked)
+                if hasattr(agent, 'session_manager') and hasattr(agent.session_manager, 'cancelled'):
+                    if agent.session_manager.cancelled:
+                        import logging
+                        logger = logging.getLogger(__name__)
+                        logger.info(f"🛑 Stream cancelled for session {session_id} - stopping event processing")
+                        # Send stop event and exit stream
+                        yield self.formatter.create_response_event("\n\n*Session stopped by user*")
+                        break
                 while self.pending_events:
                     pending_event = self.pending_events.pop(0)
                     yield pending_event
@@ -465,15 +394,19 @@ Analysis completed successfully. The detailed insights have been generated based
                     # Only process if input looks complete (valid JSON or empty for no-param tools)
                     should_process = False
                     processed_input = None
-                    
+
                     # Handle empty input case
                     if tool_input == "":
-                        # Check if this tool is supposed to have no parameters
-                        if tool_name in ['get_portfolio_overview', 'get_asset_overview']:
-                            should_process = True
-                            processed_input = {}  # Set empty dict for UI
-                        else:
-                            should_process = False  # Wait for input to arrive
+                        # For tools with no parameters, empty input is valid
+                        # For tools with parameters, we need to wait for input
+                        # Check if tool_input arrives as empty string initially then gets populated
+                        # To be safe, we'll wait a bit to see if parameters arrive
+                        should_process = False
+                        processed_input = None
+                    elif tool_input == "{}":
+                        # Empty JSON object means tool has no parameters (valid)
+                        should_process = True
+                        processed_input = {}
                     else:
                         # Check if input is valid JSON (complete)
                         try:
