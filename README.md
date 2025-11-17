@@ -32,7 +32,7 @@ This platform showcases AWS Bedrock AgentCore's capabilities:
    - Uses AgentCore Memory for conversation persistence
    - Integrates with AgentCore Gateway via SigV4
    - Calls Built-in Tools via AWS API
-   - Communicates with other Runtimes via A2A protocol
+   - Communicates with other agents via A2A protocol (Work in Progress)
 
 3. **AgentCore Gateway**
    - API Gateway with SigV4 authentication
@@ -48,7 +48,7 @@ This platform showcases AWS Bedrock AgentCore's capabilities:
    - **Local Tools**: Weather, visualization, web search, URL fetcher (embedded in Runtime)
    - **Built-in Tools**: Bedrock Code Interpreter for diagrams/charts (AWS API)
    - **Gateway Tools**: Research, search, and finance data (via AgentCore Gateway + MCP)
-   - **Runtime Tools** (Optional): Report Writer with A2A communication
+   - **Runtime Tools** (Work in Progress): Report Writer with A2A protocol
 
 ## Key Features
 
@@ -105,7 +105,7 @@ Accessed via AgentCore Gateway with SigV4 auth:
 <img src="docs/images/finance.gif" alt="Finance Tools Demo" width="800">
 
 ### Runtime Tools (9 tools via 1 Runtime)
-AgentCore-to-AgentCore (A2A) communication:
+Agent-to-Agent (A2A) protocol communication (**Work in Progress**):
 - **Report Writer**: Comprehensive research reports
   - Create report with outline
   - Write sections with markdown
