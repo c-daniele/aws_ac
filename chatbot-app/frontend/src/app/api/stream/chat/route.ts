@@ -204,8 +204,16 @@ Your goal is to be helpful, accurate, and efficient in completing user requests 
           const timeSinceActivity = now - lastActivityTime
 
           if (timeSinceActivity >= 20000) {
-            controller.enqueue(encoder.encode(`: keep-alive ${new Date().toISOString()}\n\n`))
-            lastActivityTime = now
+            try {
+              controller.enqueue(encoder.encode(`: keep-alive ${new Date().toISOString()}\n\n`))
+              lastActivityTime = now
+            } catch (err) {
+              // Controller already closed, stop interval
+              if (keepAliveInterval) {
+                clearInterval(keepAliveInterval)
+                keepAliveInterval = null
+              }
+            }
           }
         }, 20000)
 

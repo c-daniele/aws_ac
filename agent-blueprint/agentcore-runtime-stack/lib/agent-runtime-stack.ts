@@ -262,6 +262,22 @@ export class AgentRuntimeStack extends cdk.Stack {
       })
     )
 
+    // AgentCore Browser Access (System Browser for WebSocket connectivity)
+    executionRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'BrowserAccess',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'bedrock-agentcore:StartBrowserSession',
+          'bedrock-agentcore:StopBrowserSession',
+          'bedrock-agentcore:GetBrowserSession',
+        ],
+        resources: [
+          `arn:aws:bedrock-agentcore:${this.region}:aws:browser/aws.browser.v1`,
+        ],
+      })
+    )
+
     // Import existing VPC (if provided)
     let vpc: ec2.IVpc | undefined
     if (props?.vpcId) {
@@ -404,6 +420,10 @@ export class AgentRuntimeStack extends cdk.Stack {
             '*.log',
             'build/**',
             'dist/**',
+            'sessions/**',
+            'output/**',
+            'uploads/**',
+            'generated_images/**',
           ],
         }),
       ],
@@ -626,6 +646,61 @@ async function sendResponse(event, status, data, reason) {
       tier: ssm.ParameterTier.STANDARD,
     })
 
+    // ============================================================
+    // Browser Custom: Create AgentCore Browser for web automation
+    // ============================================================
+    // Create Browser Custom with Public Network (no recording for cost optimization)
+    // Add timestamp suffix to avoid naming conflicts
+    const browserCustomName = projectName.replace(/-/g, '_') + '_browser_v2'
+    const browser = new agentcore.CfnBrowserCustom(
+      this,
+      'BrowserCustom',
+      {
+        name: browserCustomName,
+        networkConfiguration: {
+          networkMode: 'PUBLIC', // Internet access for web browsing
+        },
+        description: 'AgentCore Browser for web automation with Nova Act',
+        executionRoleArn: executionRole.roleArn, // Required when browserSigning is enabled
+        browserSigning: {
+          enabled: true, // Enable Web Bot Auth to reduce CAPTCHA challenges
+        },
+      }
+    )
+
+    // Grant Runtime execution role permissions to use Browser
+    executionRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'CustomBrowserAccess',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'bedrock-agentcore:CreateBrowser',
+          'bedrock-agentcore:StartBrowserSession',
+          'bedrock-agentcore:GetBrowserSession',
+          'bedrock-agentcore:UpdateBrowserSession',
+          'bedrock-agentcore:UpdateBrowserStream',
+          'bedrock-agentcore:StopBrowserSession',
+          'bedrock-agentcore:DeleteBrowser',
+          'bedrock-agentcore:ListBrowsers',
+          'bedrock-agentcore:GetBrowser',
+          'bedrock-agentcore:ListBrowserSessions',
+          'bedrock-agentcore:ConnectBrowserAutomationStream', // WebSocket automation stream (NovaAct)
+        ],
+        resources: [
+          `arn:aws:bedrock-agentcore:${this.region}:${this.account}:browser/*`,        // System browser
+          `arn:aws:bedrock-agentcore:${this.region}:${this.account}:browser-custom/*`, // Custom browser
+        ],
+      })
+    )
+
+    // Store Browser ID in Parameter Store
+    new ssm.StringParameter(this, 'BrowserIdParameter', {
+      parameterName: `/${projectName}/${environment}/agentcore/browser-id`,
+      stringValue: browser.attrBrowserId,
+      description: 'AgentCore Browser ID for web automation',
+      tier: ssm.ParameterTier.STANDARD,
+    })
+
     // Create Memory with short-term and long-term strategies using L1 construct (CfnMemory)
     const memoryName = projectName.replace(/-/g, '_') + '_memory'
     const memory = new agentcore.CfnMemory(this, 'AgentCoreMemory', {
@@ -698,6 +773,17 @@ async function sendResponse(event, status, data, reason) {
       tier: ssm.ParameterTier.STANDARD,
     })
 
+    // Secrets Manager permissions for Nova Act API key (browser automation)
+    executionRole.addToPolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ['secretsmanager:GetSecretValue'],
+        resources: [
+          `arn:aws:secretsmanager:${this.region}:${this.account}:secret:${projectName}/nova-act-api-key-*`,
+        ],
+      })
+    )
+
     // ============================================================
     // Step 7: Create AgentCore Runtime (after build completes)
     // ============================================================
@@ -731,6 +817,9 @@ async function sendResponse(event, status, data, reason) {
         ENVIRONMENT: environment,
         MEMORY_ARN: memory.attrMemoryArn,
         MEMORY_ID: memory.attrMemoryId,
+        BROWSER_ID: browser.attrBrowserId,
+        BROWSER_NAME: browserCustomName,
+        CODE_INTERPRETER_ID: codeInterpreter.attrCodeInterpreterId,
       },
 
       tags: {

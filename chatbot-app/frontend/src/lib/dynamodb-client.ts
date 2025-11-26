@@ -184,32 +184,6 @@ export async function updateUserEnabledTools(
   }
 }
 
-/**
- * Toggle specific tool (deprecated - use updateUserEnabledTools)
- */
-export async function toggleUserTool(
-  userId: string,
-  toolId: string,
-  enabled: boolean
-): Promise<string[]> {
-  try {
-    const currentTools = await getUserEnabledTools(userId)
-    let updatedTools: string[]
-
-    if (enabled) {
-      updatedTools = currentTools.includes(toolId) ? currentTools : [...currentTools, toolId]
-    } else {
-      updatedTools = currentTools.filter((t) => t !== toolId)
-    }
-
-    await updateUserEnabledTools(userId, updatedTools)
-    return updatedTools
-  } catch (error) {
-    console.error('[DynamoDB] Error toggling tool:', error)
-    throw error
-  }
-}
-
 // ============================================================
 // Session Operations
 // ============================================================
@@ -466,6 +440,85 @@ export async function toggleSessionStar(userId: string, sessionId: string): Prom
     return newStarredState
   } catch (error) {
     console.error('[DynamoDB] Error toggling session star:', error)
+    throw error
+  }
+}
+
+// ============================================================
+// Tool Registry Operations (Cloud-only)
+// ============================================================
+
+export interface ToolRegistryConfig {
+  local_tools: any[]
+  builtin_tools: any[]
+  browser_automation?: any[]
+  gateway_targets?: any[]
+  agentcore_runtime_mcp?: any[]
+}
+
+/**
+ * Get tool registry configuration from DynamoDB (TOOL_REGISTRY user)
+ * Cloud-only: Local environments should use JSON file
+ * Auto-initializes from fallback config if not exists
+ */
+export async function getToolRegistry(fallbackConfig?: ToolRegistryConfig): Promise<ToolRegistryConfig | null> {
+  try {
+    const command = new GetItemCommand({
+      TableName: TABLE_NAME,
+      Key: marshall({
+        userId: 'TOOL_REGISTRY',
+        sk: 'CONFIG',
+      }),
+    })
+
+    const response = await dynamoClient.send(command)
+
+    if (!response.Item) {
+      console.log('[DynamoDB] Tool registry not found in DynamoDB')
+
+      // Auto-initialize if fallback config is provided
+      if (fallbackConfig) {
+        console.log('[DynamoDB] Auto-initializing TOOL_REGISTRY from fallback config...')
+        await initializeToolRegistry(fallbackConfig)
+        return fallbackConfig
+      }
+
+      return null
+    }
+
+    const record = unmarshall(response.Item)
+    console.log('[DynamoDB] Tool registry loaded from DynamoDB')
+    return record.toolRegistry as ToolRegistryConfig
+  } catch (error) {
+    console.error('[DynamoDB] Error getting tool registry:', error)
+    return null
+  }
+}
+
+/**
+ * Initialize tool registry in DynamoDB with default config
+ * Called automatically when TOOL_REGISTRY doesn't exist
+ */
+export async function initializeToolRegistry(config: ToolRegistryConfig): Promise<void> {
+  try {
+    const command = new PutItemCommand({
+      TableName: TABLE_NAME,
+      Item: marshall({
+        userId: 'TOOL_REGISTRY',
+        sk: 'CONFIG',
+        toolRegistry: config,
+        updatedAt: new Date().toISOString(),
+      }),
+    })
+
+    await dynamoClient.send(command)
+    console.log('[DynamoDB] Tool registry initialized successfully')
+    console.log(`  - local_tools: ${config.local_tools?.length || 0}`)
+    console.log(`  - builtin_tools: ${config.builtin_tools?.length || 0}`)
+    console.log(`  - browser_automation: ${config.browser_automation?.length || 0} groups`)
+    console.log(`  - gateway_targets: ${config.gateway_targets?.length || 0}`)
+  } catch (error) {
+    console.error('[DynamoDB] Error initializing tool registry:', error)
     throw error
   }
 }

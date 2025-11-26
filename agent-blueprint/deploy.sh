@@ -157,6 +157,46 @@ deploy_agentcore_runtime() {
     log_step "Deploying AgentCore Runtime..."
     echo ""
 
+    # Check and configure Nova Act API key
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  Browser Automation Setup (Nova Act)"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+
+    NOVA_SECRET_EXISTS=$(aws secretsmanager describe-secret \
+        --secret-id "strands-agent-chatbot/nova-act-api-key" \
+        --query 'Name' \
+        --output text \
+        --region "$AWS_REGION" 2>/dev/null || echo "")
+
+    if [ -z "$NOVA_SECRET_EXISTS" ]; then
+        log_warn "Nova Act API Key not configured"
+        echo ""
+        echo "Nova Act is required for browser automation tools."
+        echo "Get your API key from Nova Act dashboard."
+        echo ""
+        read -p "Enter Nova Act API Key (or press Enter to skip): " NOVA_ACT_KEY
+
+        if [ -n "$NOVA_ACT_KEY" ]; then
+            log_step "Setting Nova Act API Key in Secrets Manager..."
+            aws secretsmanager create-secret \
+                --name "strands-agent-chatbot/nova-act-api-key" \
+                --secret-string "$NOVA_ACT_KEY" \
+                --description "Nova Act API Key for browser automation" \
+                --region "$AWS_REGION" > /dev/null 2>&1 || \
+            aws secretsmanager put-secret-value \
+                --secret-id "strands-agent-chatbot/nova-act-api-key" \
+                --secret-string "$NOVA_ACT_KEY" \
+                --region "$AWS_REGION" > /dev/null 2>&1
+            log_info "Nova Act API Key configured"
+        else
+            log_warn "Skipped - Browser automation tools will not work without API key"
+        fi
+    else
+        log_info "Nova Act API Key already configured"
+    fi
+    echo ""
+
     cd agentcore-runtime-stack
 
     # Install dependencies if needed

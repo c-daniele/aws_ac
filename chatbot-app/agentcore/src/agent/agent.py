@@ -10,11 +10,25 @@ import logging
 import os
 from typing import AsyncGenerator, Dict, Any, List, Optional
 from pathlib import Path
+from datetime import datetime
 from strands import Agent
 from strands.models import BedrockModel
 from strands.session.file_session_manager import FileSessionManager
 from strands.hooks import HookProvider, HookRegistry, BeforeModelCallEvent, BeforeToolCallEvent
+from strands.tools.executors import SequentialToolExecutor
 from streaming.event_processor import StreamEventProcessor
+
+# Import timezone support (zoneinfo for Python 3.9+, fallback to pytz)
+try:
+    from zoneinfo import ZoneInfo
+    TIMEZONE_AVAILABLE = True
+except ImportError:
+    try:
+        import pytz
+        TIMEZONE_AVAILABLE = True
+    except ImportError:
+        TIMEZONE_AVAILABLE = False
+        logger.warning("Neither zoneinfo nor pytz available - date will use UTC")
 
 # AgentCore Memory integration (optional, only for cloud deployment)
 try:
@@ -27,19 +41,46 @@ except ImportError:
 # Import Strands built-in tools
 from strands_tools.calculator import calculator
 
-# Import local tools (general-purpose, agent-core integrated)
-from local_tools.weather import get_current_weather
-from local_tools.visualization import create_visualization
-from local_tools.web_search import ddg_web_search
-from local_tools.url_fetcher import fetch_url_content
+# Import local tools module (general-purpose, agent-core integrated)
+import local_tools
 
-# Import built-in tools (AWS Bedrock-powered tools)
-from builtin_tools import generate_diagram_and_validate
+# Import built-in tools module (AWS Bedrock-powered tools)
+import builtin_tools
 
 # Import Gateway MCP client
 from agent.gateway_mcp_client import get_gateway_client_if_enabled
 
 logger = logging.getLogger(__name__)
+
+
+def get_current_date_pacific() -> str:
+    """Get current date and hour in US Pacific timezone (America/Los_Angeles)"""
+    try:
+        if TIMEZONE_AVAILABLE:
+            try:
+                # Try zoneinfo first (Python 3.9+)
+                from zoneinfo import ZoneInfo
+                pacific_tz = ZoneInfo("America/Los_Angeles")
+                now = datetime.now(pacific_tz)
+                # Get timezone abbreviation (PST/PDT)
+                tz_abbr = now.strftime("%Z")
+            except (ImportError, NameError):
+                # Fallback to pytz
+                import pytz
+                pacific_tz = pytz.timezone("America/Los_Angeles")
+                now = datetime.now(pacific_tz)
+                # Get timezone abbreviation (PST/PDT)
+                tz_abbr = now.strftime("%Z")
+
+            return now.strftime(f"%Y-%m-%d (%A) %H:00 {tz_abbr}")
+        else:
+            # Fallback to UTC if no timezone library available
+            now = datetime.utcnow()
+            return now.strftime("%Y-%m-%d (%A) %H:00 UTC")
+    except Exception as e:
+        logger.warning(f"Failed to get Pacific time: {e}, using UTC")
+        now = datetime.utcnow()
+        return now.strftime("%Y-%m-%d (%A) %H:00 UTC")
 
 
 class StopHook(HookProvider):
@@ -144,14 +185,24 @@ def get_global_stream_processor():
 
 
 # Tool ID to tool object mapping
+# Start with Strands built-in tools (externally managed)
 TOOL_REGISTRY = {
     "calculator": calculator,
-    "get_current_weather": get_current_weather,
-    "create_visualization": create_visualization,
-    "ddg_web_search": ddg_web_search,
-    "fetch_url_content": fetch_url_content,
-    "generate_diagram_and_validate": generate_diagram_and_validate,
 }
+
+# Dynamically load all local tools from local_tools.__all__
+# This ensures we only need to maintain the list in one place (__init__.py)
+for tool_name in local_tools.__all__:
+    tool_obj = getattr(local_tools, tool_name)
+    TOOL_REGISTRY[tool_name] = tool_obj
+    logger.info(f"Registered local tool: {tool_name}")
+
+# Dynamically load all builtin tools from builtin_tools.__all__
+# This ensures we only need to maintain the list in one place (__init__.py)
+for tool_name in builtin_tools.__all__:
+    tool_obj = getattr(builtin_tools, tool_name)
+    TOOL_REGISTRY[tool_name] = tool_obj
+    logger.info(f"Registered builtin tool: {tool_name}")
 
 
 class ChatbotAgent:
@@ -191,7 +242,9 @@ class ChatbotAgent:
         # Store model configuration
         self.model_id = model_id or "us.anthropic.claude-haiku-4-5-20251001-v1:0"
         self.temperature = temperature if temperature is not None else 0.7
-        self.system_prompt = system_prompt or """You are an intelligent AI agent with dynamic tool capabilities. You can perform various tasks based on the combination of tools available to you.
+
+        # Build system prompt with current date
+        base_system_prompt = system_prompt or """You are an intelligent AI agent with dynamic tool capabilities. You can perform various tasks based on the combination of tools available to you.
 
 Key guidelines:
 - You can ONLY use tools that are explicitly provided to you in each conversation
@@ -201,7 +254,22 @@ Key guidelines:
 - Always explain your reasoning when using tools
 - If you don't have the right tool for a task, clearly inform the user about the limitation
 
+Browser Automation Best Practices:
+- **ALWAYS prefer direct URLs with search parameters** over multi-step form filling
+- Examples:
+  ✓ Use: "https://www.google.com/search?q=AI+news" (1 step)
+  ✗ Avoid: Navigate to google.com → find search box → type → click search (3-4 steps)
+  ✓ Use: "https://www.amazon.com/s?k=wireless+headphones"
+  ✗ Avoid: Navigate to amazon.com → find search → type → submit
+- This reduces steps, improves reliability, and bypasses CAPTCHA challenges more effectively
+- Only use browser_act for interactions when direct URL navigation is not possible
+
 Your goal is to be helpful, accurate, and efficient in completing user requests using the available tools."""
+
+        # Add current date in US Pacific time
+        current_date = get_current_date_pacific()
+        self.system_prompt = f"{base_system_prompt}\n\nCurrent date: {current_date}"
+
         self.caching_enabled = caching_enabled if caching_enabled is not None else True
 
         # Session Manager Selection: AgentCore Memory (cloud) vs File-based (local)
@@ -364,9 +432,12 @@ Your goal is to be helpful, accurate, and efficient in completing user requests 
                 logger.info("✅ Conversation caching hook enabled")
 
             # Create agent with session manager and hooks
+            # Use SequentialToolExecutor to prevent concurrent browser operations
+            # This prevents "Failed to start and initialize Playwright" errors with NovaAct
             self.agent = Agent(
                 model=model,
                 tools=tools,
+                tool_executor=SequentialToolExecutor(),
                 session_manager=self.session_manager,
                 hooks=hooks if hooks else None
             )
@@ -398,6 +469,11 @@ Your goal is to be helpful, accurate, and efficient in completing user requests 
 
         if not self.agent:
             self.create_agent()
+
+        # Set SESSION_ID for browser session isolation (each conversation has isolated browser)
+        import os
+        os.environ['SESSION_ID'] = self.session_id
+        os.environ['USER_ID'] = self.user_id or self.session_id
 
         try:
             logger.info(f"Streaming message: {message[:50]}...")

@@ -28,6 +28,7 @@ export interface ToolResultEvent {
     format: string;
     data: string;
   }>;
+  metadata?: Record<string, any>;
 }
 
 export interface InitEvent {
@@ -145,6 +146,10 @@ export interface ChatSessionState {
   streaming: StreamingState | null;
   toolExecutions: ToolExecution[];
   toolProgress: ToolProgressState[];
+  browserSession: {
+    sessionId: string | null;
+    browserId: string | null;
+  } | null;
 }
 
 export interface ChatUIState {

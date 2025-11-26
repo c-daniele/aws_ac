@@ -167,12 +167,61 @@ export const useStreamEvents = ({
       )
       
       currentToolExecutionsRef.current = updatedExecutions
-      
+
+      // Extract browser session info from metadata (for Live View)
+      const browserSessionUpdate: any = {}
+      if (data.metadata?.browserSessionId) {
+        console.log('[Live View] Browser session detected:', {
+          sessionId: data.metadata.browserSessionId,
+          browserId: data.metadata.browserId,
+          liveViewUrl: data.metadata.liveViewUrl ? 'present' : 'missing'
+        })
+
+        // Store browser session info (URL will be fetched on-demand when View Browser is clicked)
+        const browserSession = {
+          sessionId: data.metadata.browserSessionId,
+          browserId: data.metadata.browserId || null
+        }
+
+        // Save browserSession for this session
+        browserSessionUpdate.browserSession = browserSession
+
+        // Save to DynamoDB session metadata
+        const currentSessionId = sessionStorage.getItem('chat-session-id')
+        if (currentSessionId) {
+          // Save to sessionStorage as cache
+          sessionStorage.setItem(`browser-session-${currentSessionId}`, JSON.stringify(browserSession))
+
+          // Save to DynamoDB (async, don't block UI)
+          fetch('/api/session/update-browser-session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              sessionId: currentSessionId,
+              browserSession
+            })
+          }).catch(err => {
+            console.warn('[Live View] Failed to save browserSession to DynamoDB:', err)
+          })
+
+          console.log('[Live View] Saved browserSession for session:', currentSessionId)
+        }
+      } else {
+        console.log('[Live View] No browser session in metadata:', data.metadata)
+      }
+
       // Update state
-      setSessionState(prev => ({
-        ...prev,
-        toolExecutions: updatedExecutions
-      }))
+      setSessionState(prev => {
+        const newState = {
+          ...prev,
+          toolExecutions: updatedExecutions,
+          ...browserSessionUpdate
+        }
+        if (browserSessionUpdate.browserSession) {
+          console.log('[Live View] State updated with browser session:', newState.browserSession)
+        }
+        return newState
+      })
 
       // Update tool message
       setMessages(prev => prev.map(msg => {
@@ -202,13 +251,14 @@ export const useStreamEvents = ({
 
 
 
-      // Reset session state
-      setSessionState({
+      // Reset session state (keep browserSession to maintain Live View button)
+      setSessionState(prev => ({
         reasoning: null,
         streaming: null,
         toolExecutions: [],
-        toolProgress: []
-      })
+        toolProgress: [],
+        browserSession: prev.browserSession  // Preserve browser session
+      }))
 
       setUIState(prev => ({ ...prev, isTyping: false, showProgressPanel: false }))
     }
@@ -282,7 +332,7 @@ export const useStreamEvents = ({
       }])
       
       setUIState(prev => ({ ...prev, isTyping: false }))
-      setSessionState({ reasoning: null, streaming: null, toolExecutions: [], toolProgress: [] })
+      setSessionState({ reasoning: null, streaming: null, toolExecutions: [], toolProgress: [], browserSession: null })
     }
   }, [setMessages, setUIState, setSessionState])
 

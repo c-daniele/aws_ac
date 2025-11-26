@@ -9,6 +9,7 @@ import { AssistantTurn } from "@/components/chat/AssistantTurn"
 import { Greeting } from "@/components/Greeting"
 import { ToolSidebar } from "@/components/ToolSidebar"
 import { SuggestedQuestions } from "@/components/SuggestedQuestions"
+import { BrowserLiveViewButton } from "@/components/BrowserLiveViewButton"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -42,6 +43,7 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
     sessionId,
     loadSession,
     onGatewayToolsChange,
+    browserSession,
   } = useChat()
 
   // iframe auth (only for embedded mode)
@@ -218,6 +220,9 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
                 {availableTools.filter(tool => tool.enabled).length}/{availableTools.length} tools
               </div>
             )}
+
+            {/* Browser Live View Button */}
+            <BrowserLiveViewButton sessionId={sessionId} browserSession={browserSession} />
           </div>
         </div>
 

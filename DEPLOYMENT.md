@@ -7,8 +7,9 @@ Complete deployment instructions for the AgentCore-based chatbot platform.
 - **AWS Account** with Bedrock access (Claude models enabled)
 - **AWS CLI** configured with credentials
 - **Docker** installed and running
-- **Node.js 18+** and **Python 3.13+**
+- **Node.js** and **Python** installed
 - **CDK CLI**: `npm install -g aws-cdk`
+- **AgentCore** enabled in your AWS account region
 
 ## Architecture Overview
 
@@ -16,16 +17,21 @@ Complete deployment instructions for the AgentCore-based chatbot platform.
 User → CloudFront → ALB → Frontend+BFF (Fargate)
                               ↓ HTTP
                          AgentCore Runtime
-                         (AWS Bedrock service)
+                         (Strands Agent container)
                               ↓
-            ┌─────────────────┼─────────────────┬──────────────────┐
-            │                 │                 │                  │
-            ↓ SigV4           ↓ A2A             ↓ AWS API          ↓
-     AgentCore Gateway   Report Writer     Built-in Tools   AgentCore Memory
-                         Runtime           (Code Interpreter)
-            ↓
+            ┌─────────────────┼─────────────────┐
+            │                 │                 │
+            ↓ SigV4           ↓ A2A             ↓ AWS SDK
+     AgentCore Gateway   Report Writer 🚧   Built-in Tools
+     (MCP endpoints)     Runtime           (Code Interpreter,
+            ↓                               Browser + Nova Act)
      Lambda Functions (5x)
-     (MCP Protocol)
+     └─ Wikipedia, ArXiv,
+        Google, Tavily, Finance
+
+     AgentCore Memory
+     └─ Conversation history
+        User preferences & facts
 ```
 
 ## Quick Deployment
@@ -71,13 +77,23 @@ cd agent-blueprint
 - **Location**: `agent-blueprint/agentcore-runtime-stack/`
 
 ### 3. AgentCore Memory
-- **Backend**: DynamoDB-backed conversation persistence
+- **Purpose**: Persistent conversation storage with user preferences/facts retrieval
+- **Features**: Short-term (conversation history) + Long-term (user context)
 - **Documentation**: https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/memory.html
 - **Location**: Deployed with AgentCore Runtime
 
-### 4. AgentCore Gateway
-- **Backend**: API Gateway with AWS_IAM authentication
-- **Tools**: 5 Lambda functions (12 tools total via MCP protocol)
+### 4. Built-in Tools
+- **Protocol**: AWS SDK + WebSocket
+- **Tools**:
+  - Code Interpreter: Python code execution for diagrams/charts
+  - Browser Automation: Web navigation and data extraction (Nova Act AI)
+- **Documentation**: https://docs.aws.amazon.com/bedrock/latest/userguide/
+- **Location**: Integrated with AgentCore Runtime
+
+### 5. AgentCore Gateway
+- **Purpose**: MCP tool endpoints with SigV4 authentication
+- **Architecture**: Lambda functions exposed as MCP endpoints via AgentCore Gateway
+- **Tools**: 5 Lambda functions (12 tools total)
   - Wikipedia (2 tools)
   - ArXiv (2 tools)
   - Google Search (2 tools)
@@ -86,9 +102,11 @@ cd agent-blueprint
 - **Documentation**: https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway.html
 - **Location**: `agent-blueprint/agentcore-gateway-stack/`
 
-### 5. Report Writer Runtime (Optional)
-- **Communication**: A2A protocol with main Runtime
+### 6. Report Writer Runtime (Optional, In Progress)
+- **Protocol**: A2A (Agent-to-Agent) with main Runtime
+- **Features**: Multi-section research reports with charts
 - **Storage**: S3 bucket for generated DOCX files
+- **Status**: 🚧 In Development
 - **Location**: `agent-blueprint/agentcore-runtime-a2a-stack/report-writer/`
 
 ## Step-by-Step Deployment
@@ -181,10 +199,18 @@ cd ../chatbot-app
 
 **Access**:
 - Frontend: http://localhost:3000
-- AgentCore Runtime: http://localhost:8080
-- API Docs: http://localhost:8080/docs
+- AgentCore Runtime: http://localhost:8000
+- API Docs: http://localhost:8000/docs
 
-**Note**: Local mode runs AgentCore Runtime locally but still uses AWS Bedrock API for LLM calls.
+**What runs locally**:
+- ✅ Frontend (Next.js)
+- ✅ AgentCore Runtime (Strands Agent)
+- ✅ Local Tools (5 tools)
+- ✅ Built-in Tools (Code Interpreter, Browser via AWS API)
+- ❌ AgentCore Gateway (requires cloud deployment)
+- ❌ AgentCore Memory (uses local file storage instead)
+
+**Note**: Local mode runs AgentCore Runtime in a container but still uses AWS Bedrock API for model calls and built-in tools.
 
 ## Post-Deployment Configuration
 
@@ -257,13 +283,19 @@ aws bedrock-agentcore list-gateway-targets \
 ### Local Development Issues
 
 ```bash
-# Check AgentCore log
-tail -f chatbot-app/agentcore.log
+# Check AgentCore Runtime logs
+docker logs -f agentcore
+
+# Or check via Docker Compose
+cd chatbot-app
+docker-compose logs -f agentcore
 
 # Common issues:
-# - Port 8080 already in use (kill existing process)
+# - Port 8000 already in use (kill existing process or change port)
+# - Port 3000 already in use (kill existing process)
 # - AWS credentials not configured (run aws configure)
 # - Bedrock access denied (check IAM permissions)
+# - AgentCore not enabled in region (contact AWS support)
 ```
 
 ## Updating Deployment

@@ -5,11 +5,38 @@ It supports matplotlib, seaborn, pandas, and numpy for creating visualizations.
 """
 
 from strands import tool
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import logging
 import os
 
 logger = logging.getLogger(__name__)
+
+
+def _get_code_interpreter_id() -> Optional[str]:
+    """Get Custom Code Interpreter ID from environment or Parameter Store"""
+    # 1. Check environment variable (set by AgentCore Runtime)
+    code_interpreter_id = os.getenv('CODE_INTERPRETER_ID')
+    if code_interpreter_id:
+        logger.info(f"Found CODE_INTERPRETER_ID in environment: {code_interpreter_id}")
+        return code_interpreter_id
+
+    # 2. Try Parameter Store (for local development or alternative configuration)
+    try:
+        import boto3
+        project_name = os.getenv('PROJECT_NAME', 'strands-agent-chatbot')
+        environment = os.getenv('ENVIRONMENT', 'dev')
+        region = os.getenv('AWS_REGION', 'us-west-2')
+        param_name = f"/{project_name}/{environment}/agentcore/code-interpreter-id"
+
+        logger.info(f"Checking Parameter Store for Code Interpreter ID: {param_name}")
+        ssm = boto3.client('ssm', region_name=region)
+        response = ssm.get_parameter(Name=param_name)
+        code_interpreter_id = response['Parameter']['Value']
+        logger.info(f"Found CODE_INTERPRETER_ID in Parameter Store: {code_interpreter_id}")
+        return code_interpreter_id
+    except Exception as e:
+        logger.warning(f"Custom Code Interpreter ID not found in Parameter Store: {e}")
+        return None
 
 
 @tool
@@ -78,14 +105,30 @@ def generate_diagram_and_validate(
     try:
         logger.info(f"Generating diagram via Code Interpreter: {diagram_filename}")
 
-        # 1. Initialize Code Interpreter
+        # 1. Get Custom Code Interpreter ID
+        code_interpreter_id = _get_code_interpreter_id()
+
+        if not code_interpreter_id:
+            return {
+                "content": [{
+                    "text": """❌ Custom Code Interpreter ID not found.
+
+Code Interpreter tools require Custom Code Interpreter.
+Please deploy AgentCore Runtime Stack to create Custom Code Interpreter."""
+                }],
+                "status": "error"
+            }
+
+        # 2. Initialize Code Interpreter with Custom resource
         region = os.getenv('AWS_REGION', 'us-west-2')
         code_interpreter = CodeInterpreter(region)
-        code_interpreter.start()
+
+        logger.info(f"🔐 Starting Custom Code Interpreter (ID: {code_interpreter_id})")
+        code_interpreter.start(identifier=code_interpreter_id)
 
         logger.info(f"Code Interpreter started - executing code for {diagram_filename}")
 
-        # 2. Execute Python code
+        # 3. Execute Python code
         response = code_interpreter.invoke("executeCode", {
             "code": python_code,
             "language": "python",
@@ -94,7 +137,7 @@ def generate_diagram_and_validate(
 
         logger.info(f"Code execution completed for {diagram_filename}")
 
-        # 3. Check for errors
+        # 4. Check for errors
         execution_success = False
         execution_output = ""
 
@@ -142,7 +185,7 @@ Please try again or simplify your code."""
 
         logger.info("Code execution successful, downloading file...")
 
-        # 4. Download the generated file
+        # 5. Download the generated file
         file_content = None
         try:
             download_response = code_interpreter.invoke("readFiles", {"paths": [diagram_filename]})
@@ -204,7 +247,7 @@ plt.savefig('{diagram_filename}', dpi=300, bbox_inches='tight')
         finally:
             code_interpreter.stop()
 
-        # 5. Return ToolResult in Strands SDK format
+        # 6. Return ToolResult in Strands SDK format
         file_size_kb = len(file_content) / 1024
 
         logger.info(f"Diagram successfully generated and encoded: {file_size_kb:.1f} KB")

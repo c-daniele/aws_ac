@@ -132,6 +132,10 @@ export interface SessionMetadata {
     lastTemperature?: number
     totalTokens?: number
     agentCoreTraceId?: string
+    browserSession?: {
+      sessionId: string | null
+      browserId: string | null
+    }
     [key: string]: any
   }
 }

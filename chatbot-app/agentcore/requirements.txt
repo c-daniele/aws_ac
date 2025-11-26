@@ -6,7 +6,8 @@ fastapi==0.116.1
 uvicorn[standard]==0.35.0
 
 # Strands Agent Framework
-strands-agents==1.16.0
+# Using 1.14.0 for compatibility with nova-act 2.3.18.0
+strands-agents==1.14.0
 strands-agents-tools==0.2.3
 
 # AWS & Bedrock
@@ -28,3 +29,7 @@ aws-opentelemetry-distro>=0.10.1
 
 # Note: MCP, Redis, DynamoDB will be added in Phase 2
 bedrock-agentcore
+
+# Nova Act SDK (for natural language browser automation via AgentCore Browser)
+# Nova Act includes playwright as a dependency, so no need to install it separately
+nova-act==2.3.18.0

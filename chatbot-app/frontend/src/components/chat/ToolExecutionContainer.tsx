@@ -406,31 +406,29 @@ export const ToolExecutionContainer: React.FC<ToolExecutionContainerProps> = ({ 
                 <div className={`border-t ${compact ? "border-border/60 bg-background/50" : "border-primary/20 bg-background/70"} backdrop-blur-sm`}>
                   <div className={`${compact ? "p-3" : "p-4"} min-w-0 max-w-full overflow-x-auto break-words`} style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
                     {/* Tool Input */}
-                    {toolExecution.toolInput !== undefined && (
-                      <div className={compact ? "mb-4" : "mb-6"}>
-                        <div className="flex items-center gap-2 mb-3">
-                          <Zap className="h-4 w-4 text-primary" />
-                          <h4 className="text-sm font-semibold text-foreground">Input Parameters</h4>
-                        </div>
-                        {toolExecution.toolInput && Object.keys(toolExecution.toolInput).length > 0 ? (
-                          <div className="bg-background rounded-lg border border-border overflow-x-auto" style={{ maxWidth: '100%', width: '100%' }}>
-                            <div className="p-3 break-words" style={{ maxWidth: '100%', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
-                              <JsonDisplay
-                                data={toolExecution.toolInput}
-                                maxLines={6}
-                                label="Parameters"
-                              />
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="bg-background rounded-lg border border-border p-3 break-words" style={{ maxWidth: '100%', width: '100%', wordBreak: 'break-word' }}>
-                            <div className="text-sm text-muted-foreground italic">
-                              No input parameters (this tool takes no arguments)
-                            </div>
-                          </div>
-                        )}
+                    <div className={compact ? "mb-4" : "mb-6"}>
+                      <div className="flex items-center gap-2 mb-3">
+                        <Zap className="h-4 w-4 text-primary" />
+                        <h4 className="text-sm font-semibold text-foreground">Input Parameters</h4>
                       </div>
-                    )}
+                      {toolExecution.toolInput && Object.keys(toolExecution.toolInput).length > 0 ? (
+                        <div className="bg-background rounded-lg border border-border overflow-x-auto" style={{ maxWidth: '100%', width: '100%' }}>
+                          <div className="p-3 break-words" style={{ maxWidth: '100%', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
+                            <JsonDisplay
+                              data={toolExecution.toolInput}
+                              maxLines={6}
+                              label="Parameters"
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="bg-background rounded-lg border border-border p-3 break-words" style={{ maxWidth: '100%', width: '100%', wordBreak: 'break-word' }}>
+                          <div className="text-sm text-muted-foreground italic">
+                            No input parameters (this tool takes no arguments)
+                          </div>
+                        </div>
+                      )}
+                    </div>
 
                     {/* Reasoning Process */}
                     {toolExecution.reasoningText && toolExecution.reasoningText.trim() && (

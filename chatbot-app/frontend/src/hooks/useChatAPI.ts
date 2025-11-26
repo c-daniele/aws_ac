@@ -127,19 +127,42 @@ export const useChatAPI = ({
   }, [setAvailableTools, sessionId])
 
   /**
-   * Toggle tool enabled state (frontend-only, no API call)
-   * Tool preferences are committed to DDB only when message is sent
+   * Toggle tool enabled state (in-memory only)
+   * Tool preferences are committed to storage when message is sent
    */
   const toggleTool = useCallback(async (toolId: string) => {
     try {
-      // Update frontend state immediately (optimistic update)
-      setAvailableTools(prev => prev.map(tool =>
-        tool.id === toolId
-          ? { ...tool, enabled: !tool.enabled }
-          : tool
-      ))
+      // Update frontend state
+      setAvailableTools(prev => prev.map(tool => {
+        // Direct tool toggle
+        if (tool.id === toolId) {
+          return { ...tool, enabled: !tool.enabled }
+        }
 
-      logger.debug(`Tool ${toolId} toggled (frontend state only, will commit on next message)`)
+        // Check if this is a grouped tool with nested tools
+        if ((tool as any).isDynamic && (tool as any).tools) {
+          const nestedTools = (tool as any).tools
+          const nestedIndex = nestedTools.findIndex((t: any) => t.id === toolId)
+
+          if (nestedIndex !== -1) {
+            // Toggle the nested tool
+            const updatedNestedTools = [...nestedTools]
+            updatedNestedTools[nestedIndex] = {
+              ...updatedNestedTools[nestedIndex],
+              enabled: !updatedNestedTools[nestedIndex].enabled
+            }
+
+            return {
+              ...tool,
+              tools: updatedNestedTools
+            }
+          }
+        }
+
+        return tool
+      }))
+
+      logger.debug(`Tool ${toolId} toggled (in-memory, will commit on next message)`)
     } catch (error) {
       logger.error('Failed to toggle tool:', error)
     }
@@ -180,10 +203,24 @@ export const useChatAPI = ({
       // Use ref to get latest sessionId (avoids stale closure)
       const currentSessionId = sessionIdRef.current
 
-      // Extract enabled LOCAL tools only (exclude gateway tools)
-      const enabledToolIds = availableTools
-        .filter(tool => tool.enabled && !tool.id.startsWith('gateway_'))
-        .map(tool => tool.id)
+      // Extract enabled tool IDs (including nested tools from groups)
+      const enabledToolIds: string[] = []
+
+      availableTools.forEach(tool => {
+        // Check if this is a grouped tool with nested tools
+        if ((tool as any).isDynamic && (tool as any).tools) {
+          // Add enabled nested tools
+          const nestedTools = (tool as any).tools || []
+          nestedTools.forEach((nestedTool: any) => {
+            if (nestedTool.enabled) {
+              enabledToolIds.push(nestedTool.id)
+            }
+          })
+        } else if (tool.enabled && !tool.id.startsWith('gateway_')) {
+          // Add regular enabled tools (exclude gateway prefix)
+          enabledToolIds.push(tool.id)
+        }
+      })
 
       // Combine with Gateway tool IDs (from props)
       const allEnabledToolIds = [...enabledToolIds, ...gatewayToolIds]

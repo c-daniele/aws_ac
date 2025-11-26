@@ -55,15 +55,39 @@
       "icon": "📊",
       "enabled": true,
       "isDynamic": false
-    },
+    }
+  ],
+  "browser_automation": [
     {
       "id": "browser_automation",
-      "name": "Browser Control",
-      "description": "Automate browser actions using natural language (Coming Soon)",
+      "name": "Browser Automation",
+      "description": "Web browser automation powered by Nova Act AI (4 tools)",
       "category": "browser",
       "icon": "🌐",
-      "enabled": false,
-      "isDynamic": false
+      "enabled": true,
+      "isDynamic": true,
+      "tools": [
+        {
+          "id": "browser_navigate",
+          "name": "Navigate",
+          "description": "Navigate browser to a URL and see the page"
+        },
+        {
+          "id": "browser_act",
+          "name": "Browser Action",
+          "description": "Execute browser actions using natural language"
+        },
+        {
+          "id": "browser_extract",
+          "name": "Extract Data",
+          "description": "Extract structured data from current page"
+        },
+        {
+          "id": "browser_get_page_info",
+          "name": "Get Page Info",
+          "description": "Get structured page information (fast, no AI)"
+        }
+      ]
     }
   ],
   "gateway_targets": [

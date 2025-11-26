@@ -268,6 +268,10 @@ class StreamEventFormatter:
         if result_images:
             tool_result_data["images"] = result_images
 
+        # Include metadata if present (e.g., browserSessionId for Live View)
+        if "metadata" in tool_result:
+            tool_result_data["metadata"] = tool_result["metadata"]
+
         return StreamEventFormatter.format_sse_event(tool_result_data)
     
 

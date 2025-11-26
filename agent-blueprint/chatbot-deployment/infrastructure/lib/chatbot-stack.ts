@@ -492,8 +492,8 @@ async function sendResponse(event, status, data, reason) {
 
     // Frontend + BFF Task Definition
     const frontendTaskDefinition = new ecs.FargateTaskDefinition(this, 'ChatbotFrontendTaskDef', {
-      memoryLimitMiB: 1024,  // Increased for BFF functionality
-      cpu: 512,              // Increased for BFF functionality
+      memoryLimitMiB: 4096,  // 4 GB for BFF + Live View functionality
+      cpu: 2048,             // 2 vCPU for improved performance
     });
 
     // Add AgentCore Runtime invocation permissions
@@ -593,6 +593,29 @@ async function sendResponse(event, status, data, reason) {
       })
     );
 
+    // Add AgentCore Browser Access (for Live View)
+    frontendTaskDefinition.addToTaskRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'AgentCoreBrowserAccess',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'bedrock-agentcore:GetBrowser',
+          'bedrock-agentcore:ListBrowsers',
+          'bedrock-agentcore:StartBrowserSession',
+          'bedrock-agentcore:GetBrowserSession',
+          'bedrock-agentcore:ListBrowserSessions',
+          'bedrock-agentcore:StopBrowserSession',
+          'bedrock-agentcore:UpdateBrowserStream',
+          'bedrock-agentcore:ConnectBrowserAutomationStream',
+          'bedrock-agentcore:ConnectBrowserLiveViewStream'
+        ],
+        resources: [
+          `arn:aws:bedrock-agentcore:${this.region}:${this.account}:browser/*`,
+          `arn:aws:bedrock-agentcore:${this.region}:${this.account}:browser-custom/*`
+        ]
+      })
+    );
+
     // Add CloudWatch permissions for logging
     frontendTaskDefinition.addToTaskRolePolicy(
       new iam.PolicyStatement({
@@ -635,6 +658,19 @@ async function sendResponse(event, status, data, reason) {
       console.log('[ChatbotStack] Memory ID will be fetched from Parameter Store');
     } catch (error) {
       console.log('[ChatbotStack] Memory ID not available (AgentCore Runtime not deployed yet)');
+    }
+
+    // Add AgentCore Browser ID from SSM Parameter Store (for Live View)
+    try {
+      const browserIdParam = ssm.StringParameter.fromStringParameterName(
+        this,
+        'BrowserIdParameter',
+        `/${projectName}/${environment}/agentcore/browser-id`
+      );
+      frontendEnvironment.BROWSER_ID = browserIdParam.stringValue;
+      console.log('[ChatbotStack] Browser ID will be fetched from Parameter Store');
+    } catch (error) {
+      console.log('[ChatbotStack] Browser ID not available (AgentCore Runtime not deployed yet)');
     }
 
     // Add CORS origins configuration for frontend CSP

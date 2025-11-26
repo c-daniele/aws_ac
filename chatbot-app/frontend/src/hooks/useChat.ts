@@ -37,6 +37,7 @@ interface UseChatReturn {
   sessionId: string | null
   loadSession: (sessionId: string) => Promise<void>
   onGatewayToolsChange: (enabledToolIds: string[]) => void
+  browserSession: { sessionId: string | null; browserId: string | null } | null
 }
 
 export const useChat = (props?: UseChatProps): UseChatReturn => {
@@ -50,7 +51,8 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
     reasoning: null,
     streaming: null,
     toolExecutions: [],
-    toolProgress: []
+    toolProgress: [],
+    browserSession: null
   })
   
   const [uiState, setUIState] = useState<ChatUIState>({
@@ -205,6 +207,65 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
     }
   }, []) // Empty dependency - run once on mount
 
+  // Restore browserSession from DynamoDB when chat session loads
+  useEffect(() => {
+    if (!sessionId) return
+
+    async function loadBrowserSession() {
+      try {
+        // First try sessionStorage cache
+        const cachedBrowserSession = sessionStorage.getItem(`browser-session-${sessionId}`)
+        if (cachedBrowserSession) {
+          const browserSession = JSON.parse(cachedBrowserSession)
+          console.log('[useChat] Restoring browser session from cache:', browserSession)
+          setSessionState(prev => ({
+            ...prev,
+            browserSession
+          }))
+          return
+        }
+
+        // Load from DynamoDB
+        const response = await fetch(`/api/session/${sessionId}`)
+
+        // 404 is expected for new sessions not yet saved to DynamoDB
+        if (response.status === 404) {
+          console.log('[useChat] Session not yet created in DynamoDB (new session)')
+          return
+        }
+
+        if (response.ok) {
+          const data = await response.json()
+          if (data.success && data.session?.metadata?.browserSession) {
+            const browserSession = data.session.metadata.browserSession
+            console.log('[useChat] Restoring browser session from DynamoDB:', browserSession)
+
+            // Update state
+            setSessionState(prev => ({
+              ...prev,
+              browserSession
+            }))
+
+            // Cache in sessionStorage
+            sessionStorage.setItem(`browser-session-${sessionId}`, JSON.stringify(browserSession))
+          } else {
+            // Clear browser session if no data
+            console.log('[useChat] No browser session found for this session')
+            setSessionState(prev => ({
+              ...prev,
+              browserSession: null
+            }))
+          }
+        }
+      } catch (e) {
+        // Silently ignore errors - browserSession is optional
+        console.log('[useChat] Could not load browser session:', e)
+      }
+    }
+
+    loadBrowserSession()
+  }, [sessionId]) // Run when sessionId changes
+
   // Wrapper functions to maintain the same interface
   const toggleTool = useCallback(async (toolId: string) => {
     await apiToggleTool(toolId)
@@ -215,14 +276,21 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
   }, [])
 
   const newChat = useCallback(async () => {
+    // Save current sessionId to clean up its browser session
+    const oldSessionId = sessionId
+
     const success = await apiNewChat()
     if (success) {
-      setSessionState({ reasoning: null, streaming: null, toolExecutions: [], toolProgress: [] })
+      setSessionState({ reasoning: null, streaming: null, toolExecutions: [], toolProgress: [], browserSession: null })
       setUIState(prev => ({ ...prev, isTyping: false }))
       // Clear messages to start fresh
       setMessages([])
+      // Clear browser session for old chat session
+      if (oldSessionId) {
+        sessionStorage.removeItem(`browser-session-${oldSessionId}`)
+      }
     }
-  }, [apiNewChat, setMessages])
+  }, [apiNewChat, setMessages, sessionId])
 
   const sendMessage = useCallback(async (e: React.FormEvent, files?: File[]) => {
     e.preventDefault()
@@ -248,7 +316,14 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
     
     setMessages(prev => [...prev, userMessage])
     setUIState(prev => ({ ...prev, isTyping: false }))
-    setSessionState({ reasoning: null, streaming: null, toolExecutions: [], toolProgress: [] })
+    // Keep browserSession from previous state - don't reset it
+    setSessionState(prev => ({
+      ...prev,
+      reasoning: null,
+      streaming: null,
+      toolExecutions: [],
+      toolProgress: []
+    }))
 
     // Reset ref as well
     currentToolExecutionsRef.current = []
@@ -264,7 +339,7 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
       },
       (error) => {
         // Error callback
-        setSessionState({ reasoning: null, streaming: null, toolExecutions: [], toolProgress: [] })
+        setSessionState({ reasoning: null, streaming: null, toolExecutions: [], toolProgress: [], browserSession: null })
       }
     )
   }, [inputMessage, apiSendMessage])
@@ -356,6 +431,7 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
     refreshTools,
     sessionId,
     loadSession,
-    onGatewayToolsChange: handleGatewayToolsChange
+    onGatewayToolsChange: handleGatewayToolsChange,
+    browserSession: sessionState.browserSession
   }
 }

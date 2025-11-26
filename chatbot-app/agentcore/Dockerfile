@@ -1,20 +1,24 @@
 # Dockerfile for Agent Core - AWS Bedrock AgentCore Runtime
-# Use AWS Public ECR to avoid Docker Hub rate limits
 FROM public.ecr.aws/docker/library/python:3.13-slim
 
 WORKDIR /app
 
 # Install system dependencies
+# Note: Playwright needs minimal libs even for remote CDP connection
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
+    ca-certificates \
+    libnss3 \
+    libnspr4 \
+    libdbus-1-3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install AgentCore Memory integration (cloud deployment only)
+# Install AgentCore Memory integration
 RUN pip install --no-cache-dir "bedrock-agentcore[strands-agents]>=0.1.0"
 
 # Copy application code
