@@ -11,6 +11,9 @@ Combines Strands Agent orchestration with AWS Bedrock AgentCore services:
 - **AgentCore Runtime**: Containerized agent deployment as managed AWS service
 - **AgentCore Memory**: Persistent conversation storage with user preference retrieval
 - **AgentCore Gateway**: MCP tool integration with SigV4 authentication
+- **AgentCore Code Interpreter**: Built-in code execution for data analysis, visualization, and chart generation
+- **AgentCore Browser**: Web automation via headless browser with live view streaming
+- **Amazon Nova Act**: Agentic foundation model for browser automation with visual reasoning
 
 ## Architecture
 
