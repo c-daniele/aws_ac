@@ -7,6 +7,7 @@ import { ChartRenderer } from '@/components/ChartRenderer'
 import { ChartToolResult } from '@/types/chart'
 import { JsonDisplay } from '@/components/ui/JsonDisplay'
 import { Markdown } from '@/components/ui/Markdown'
+import { LazyImage } from '@/components/ui/LazyImage'
 import { getApiUrl } from '@/config/environment'
 
 interface ToolExecutionContainerProps {
@@ -21,7 +22,7 @@ interface ToolExecutionContainerProps {
 }
 
 
-export const ToolExecutionContainer: React.FC<ToolExecutionContainerProps> = ({ toolExecutions, compact = false, availableTools = [], sessionId }) => {
+export const ToolExecutionContainer = React.memo<ToolExecutionContainerProps>(({ toolExecutions, compact = false, availableTools = [], sessionId }) => {
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set())
   const [selectedImage, setSelectedImage] = useState<{ src: string; alt: string } | null>(null)
 
@@ -56,18 +57,27 @@ export const ToolExecutionContainer: React.FC<ToolExecutionContainerProps> = ({ 
   }
 
   // Memoize parsed chart data to prevent re-renders during streaming
+  const toolExecutionsDeps = useMemo(() => {
+    return toolExecutions.map(t => ({
+      id: t.id,
+      isComplete: t.isComplete,
+      toolResult: t.toolResult,
+      toolName: t.toolName
+    }))
+  }, [toolExecutions])
+
   const chartDataCache = useMemo(() => {
     const cache = new Map<string, { parsed: ChartToolResult, resultString: string }>();
 
-    toolExecutions.forEach(toolExecution => {
-      if (toolExecution.toolName === 'create_visualization' &&
-          toolExecution.toolResult &&
-          toolExecution.isComplete) {
+    toolExecutionsDeps.forEach((deps) => {
+      if (deps.toolName === 'create_visualization' &&
+          deps.toolResult &&
+          deps.isComplete) {
         try {
-          const parsed = JSON.parse(toolExecution.toolResult);
-          cache.set(toolExecution.id, {
+          const parsed = JSON.parse(deps.toolResult);
+          cache.set(deps.id, {
             parsed,
-            resultString: toolExecution.toolResult
+            resultString: deps.toolResult
           });
         } catch (e) {
           // Invalid JSON, skip
@@ -76,7 +86,7 @@ export const ToolExecutionContainer: React.FC<ToolExecutionContainerProps> = ({ 
     });
 
     return cache;
-  }, [toolExecutions.map(t => t.id + ':' + t.isComplete + ':' + (t.toolResult || '')).join('|')]);
+  }, [toolExecutionsDeps]);
 
   // Helper function to render visualization tool result
   const renderVisualizationResult = useCallback((toolUseId: string) => {
@@ -494,7 +504,7 @@ export const ToolExecutionContainer: React.FC<ToolExecutionContainerProps> = ({ 
                   const imageSrc = `data:image/${image.format};base64,${typeof image.data === 'string' ? image.data : btoa(String.fromCharCode(...new Uint8Array(image.data)))}`;
                   return (
                     <div key={idx} className="relative group mb-3">
-                      <img
+                      <LazyImage
                         src={imageSrc}
                         alt={`Tool generated image ${idx + 1}`}
                         className="w-full h-auto rounded-lg border border-border shadow-sm cursor-pointer hover:shadow-lg transition-shadow"
@@ -549,4 +559,12 @@ export const ToolExecutionContainer: React.FC<ToolExecutionContainerProps> = ({ 
       )}
     </>
   )
-}
+}, (prevProps, nextProps) => {
+  return prevProps.toolExecutions.length === nextProps.toolExecutions.length &&
+    prevProps.toolExecutions.every((tool, idx) =>
+      tool.id === nextProps.toolExecutions[idx]?.id &&
+      tool.isComplete === nextProps.toolExecutions[idx]?.isComplete
+    ) &&
+    prevProps.compact === nextProps.compact &&
+    prevProps.sessionId === nextProps.sessionId
+})

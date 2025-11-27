@@ -5,6 +5,7 @@ import { Bot, User, FileText, Image } from 'lucide-react'
 import { Message } from '@/types/chat'
 import { Markdown } from '@/components/ui/Markdown'
 import { ToolExecutionContainer } from './ToolExecutionContainer'
+import { LazyImage } from '@/components/ui/LazyImage'
 
 interface ChatMessageProps {
   message: Message
@@ -20,7 +21,7 @@ interface ChatMessageProps {
     return <FileText className="w-3 h-3" />
   }
 
-export const ChatMessage: React.FC<ChatMessageProps> = ({ message, sessionId }) => {
+export const ChatMessage = React.memo<ChatMessageProps>(({ message, sessionId }) => {
   if (message.sender === 'user') {
     return (
       <div className="flex justify-end mb-8 animate-slide-in">
@@ -100,7 +101,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, sessionId }) 
               <div className="mt-4 space-y-3">
                 {message.images.map((image, idx) => (
                   <div key={idx} className="relative group">
-                    <img
+                    <LazyImage
                       src={`data:image/${image.format};base64,${image.data}`}
                       alt={`Generated image ${idx + 1}`}
                       className="max-w-full h-auto rounded-xl border border-slate-200 shadow-sm"
@@ -121,4 +122,10 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, sessionId }) 
       </div>
     </div>
   )
-}
+}, (prevProps, nextProps) => {
+  // Only re-render if these specific values change
+  return prevProps.message.id === nextProps.message.id &&
+         prevProps.message.text === nextProps.message.text &&
+         prevProps.message.isStreaming === nextProps.message.isStreaming &&
+         prevProps.sessionId === nextProps.sessionId
+})

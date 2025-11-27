@@ -3,6 +3,7 @@ import { Message, ToolExecution } from '@/types/chat'
 import { StreamEvent, ChatSessionState, ChatUIState, ToolProgressState } from '@/types/events'
 import { useLatencyTracking } from './useLatencyTracking'
 import { fetchAuthSession } from 'aws-amplify/auth'
+import { updateLastActivity } from '@/config/session'
 
 interface UseStreamEventsProps {
   sessionState: ChatSessionState
@@ -307,6 +308,9 @@ export const useStreamEvents = ({
       const messageId = streamingIdRef.current
 
       if (messageId) {
+        // Update last activity timestamp (AI response completed = activity)
+        updateLastActivity()
+
         // Record E2E latency and save metadata
         const currentSessionId = sessionStorage.getItem('chat-session-id')
         const metrics = currentSessionId

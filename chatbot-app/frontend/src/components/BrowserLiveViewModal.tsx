@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Loader2, Monitor } from 'lucide-react';
 
@@ -336,8 +336,16 @@ export function BrowserLiveViewModal({
           const conn = connectionRef.current;
           connectionRef.current = null; // Clear ref first to prevent race conditions
 
-          // Graceful disconnect with error suppression
           if (conn && typeof conn.disconnect === 'function') {
+            // KNOWN ISSUE: DCV SDK disconnect causes "Close received after close" errors
+            // This is a DCV SDK bug where multiple modules try to close the same WebSocket
+            // These errors are:
+            // - Emitted by browser's WebSocket API (not JavaScript console.error)
+            // - Cannot be suppressed via JavaScript
+            // - Harmless (no functional impact or memory leaks)
+            // - Will appear in console but can be safely ignored
+            console.log('[DCV] Disconnecting (expect harmless WebSocket close errors)...');
+
             conn.disconnect();
           }
 
@@ -415,6 +423,9 @@ export function BrowserLiveViewModal({
             <Monitor className="w-5 h-5" />
             <DialogTitle>Browser Live View</DialogTitle>
           </div>
+          <DialogDescription className="sr-only">
+            Real-time view of the browser automation session
+          </DialogDescription>
         </DialogHeader>
 
         <div className="relative flex-1 w-full bg-gray-900 flex items-center justify-center overflow-hidden">

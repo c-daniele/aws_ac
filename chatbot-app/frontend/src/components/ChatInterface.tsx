@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-import { useState, useRef, useEffect, useCallback } from "react"
+import { useState, useRef, useEffect, useCallback, useMemo } from "react"
 import { useChat } from "@/hooks/useChat"
 import { useIframeAuth, postAuthStatusToParent } from "@/hooks/useIframeAuth"
 import { ChatMessage } from "@/components/chat/ChatMessage"
@@ -19,6 +19,50 @@ import { Upload, Send, FileText, ImageIcon, Square, Bot, Brain } from "lucide-re
 
 interface ChatInterfaceProps {
   mode: 'standalone' | 'embedded'
+}
+
+// Custom debounce hook
+function useDebounce<T extends (...args: any[]) => any>(
+  callback: T,
+  delay: number
+): T {
+  const timeoutRef = useRef<NodeJS.Timeout>()
+
+  return useCallback((...args: Parameters<T>) => {
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current)
+    }
+    timeoutRef.current = setTimeout(() => {
+      callback(...args)
+    }, delay)
+  }, [callback, delay]) as T
+}
+
+// Custom throttle hook
+function useThrottle<T extends (...args: any[]) => any>(
+  callback: T,
+  delay: number
+): T {
+  const lastRunRef = useRef(0)
+  const timeoutRef = useRef<NodeJS.Timeout>()
+
+  return useCallback((...args: Parameters<T>) => {
+    const now = Date.now()
+    const timeSinceLastRun = now - lastRunRef.current
+
+    if (timeSinceLastRun >= delay) {
+      callback(...args)
+      lastRunRef.current = now
+    } else {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current)
+      }
+      timeoutRef.current = setTimeout(() => {
+        callback(...args)
+        lastRunRef.current = Date.now()
+      }, delay - timeSinceLastRun)
+    }
+  }, [callback, delay]) as T
 }
 
 export function ChatInterface({ mode }: ChatInterfaceProps) {
@@ -46,6 +90,9 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
     onGatewayToolsChange,
     browserSession,
   } = useChat()
+
+  // Stable sessionId reference to prevent unnecessary re-renders
+  const stableSessionId = useMemo(() => sessionId || undefined, [sessionId])
 
   // iframe auth (only for embedded mode)
   const iframeAuth = isEmbedded ? useIframeAuth() : { isInIframe: false, isAuthenticated: false, user: null, isLoading: false, error: null }
@@ -99,7 +146,7 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
     await sendMessage(e, files)
   }
 
-  const scrollToBottom = () => {
+  const scrollToBottomImmediate = useCallback(() => {
     if (!messagesEndRef.current) return
 
     if (isEmbedded) {
@@ -112,14 +159,16 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
     } else {
       messagesEndRef.current.scrollIntoView({ behavior: "smooth" })
     }
-  }
+  }, [isEmbedded])
+
+  const scrollToBottom = useThrottle(scrollToBottomImmediate, 200)
 
   useEffect(() => {
     // Only auto-scroll in standalone mode, not in embedded mode
     if (!isEmbedded) {
       scrollToBottom()
     }
-  }, [groupedMessages, isTyping, isEmbedded])
+  }, [groupedMessages, isTyping, isEmbedded, scrollToBottom])
 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || [])
@@ -151,7 +200,7 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
     }
   }
 
-  const adjustTextareaHeight = useCallback(() => {
+  const adjustTextareaHeightImmediate = useCallback(() => {
     const textarea = textareaRef.current
     if (textarea) {
       textarea.style.height = "auto"
@@ -160,6 +209,17 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
       textarea.style.height = `${Math.min(scrollHeight, maxHeight)}px`
     }
   }, [])
+
+  const adjustTextareaHeight = useDebounce(adjustTextareaHeightImmediate, 100)
+
+  const handleQuestionSubmit = useCallback(async (question: string) => {
+    setInputMessage(question)
+    const syntheticEvent = {
+      preventDefault: () => {},
+      target: { elements: { message: { value: question } } },
+    } as any
+    await handleSendMessage(syntheticEvent, [])
+  }, [setInputMessage, handleSendMessage])
 
   useEffect(() => {
     adjustTextareaHeight()
@@ -238,14 +298,14 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
             <div key={group.id} className="mx-auto w-full max-w-3xl px-4">
               {group.type === "user" ? (
                 group.messages.map((message) => (
-                  <ChatMessage key={message.id} message={message} sessionId={sessionId || undefined} />
+                  <ChatMessage key={message.id} message={message} sessionId={stableSessionId} />
                 ))
               ) : (
                 <AssistantTurn
                   messages={group.messages}
                   currentReasoning={currentReasoning}
                   availableTools={availableTools}
-                  sessionId={sessionId || undefined}
+                  sessionId={stableSessionId}
                 />
               )}
             </div>
@@ -279,14 +339,7 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
             <SuggestedQuestions
               key={suggestionKey}
               onQuestionSelect={(question) => setInputMessage(question)}
-              onQuestionSubmit={async (question) => {
-                setInputMessage(question)
-                const syntheticEvent = {
-                  preventDefault: () => {},
-                  target: { elements: { message: { value: question } } },
-                } as any
-                await handleSendMessage(syntheticEvent, [])
-              }}
+              onQuestionSubmit={handleQuestionSubmit}
               enabledTools={availableTools.filter((tool) => tool.enabled).map((tool) => tool.id)}
             />
           </div>

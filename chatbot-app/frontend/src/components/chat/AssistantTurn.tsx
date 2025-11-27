@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useMemo } from 'react'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -7,6 +7,7 @@ import { Message } from '@/types/chat'
 import { ReasoningState } from '@/types/events'
 import { Markdown } from '@/components/ui/Markdown'
 import { ToolExecutionContainer } from './ToolExecutionContainer'
+import { LazyImage } from '@/components/ui/LazyImage'
 import { fetchAuthSession } from 'aws-amplify/auth'
 
 interface AssistantTurnProps {
@@ -20,7 +21,7 @@ interface AssistantTurnProps {
   sessionId?: string
 }
 
-export const AssistantTurn: React.FC<AssistantTurnProps> = ({ messages, currentReasoning, availableTools = [], sessionId }) => {
+export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, currentReasoning, availableTools = [], sessionId }) => {
   // Get initial feedback state from first message
   const initialFeedback = messages[0]?.feedback || null
 
@@ -89,53 +90,76 @@ export const AssistantTurn: React.FC<AssistantTurnProps> = ({ messages, currentR
   }
 
   // Sort messages by timestamp to maintain chronological order
-  const sortedMessages = [...messages].sort((a, b) => {
-    // Extract timestamp for comparison - use id as fallback since it's based on Date.now()
-    const timeA = a.timestamp ? new Date(a.timestamp).getTime() : (typeof a.id === 'number' ? a.id : 0)
-    const timeB = b.timestamp ? new Date(b.timestamp).getTime() : (typeof b.id === 'number' ? b.id : 0)
-    return timeA - timeB
-  })
+  const sortedMessages = useMemo(() => {
+    return [...messages].sort((a, b) => {
+      // Extract timestamp for comparison - use id as fallback since it's based on Date.now()
+      const timeA = a.timestamp ? new Date(a.timestamp).getTime() : (typeof a.id === 'number' ? a.id : 0)
+      const timeB = b.timestamp ? new Date(b.timestamp).getTime() : (typeof b.id === 'number' ? b.id : 0)
+      return timeA - timeB
+    })
+  }, [messages])
 
   // Group consecutive text messages together while preserving tool message positions
-  const groupedContent: Array<{
-    type: 'text' | 'tool'
-    content: string | Message
-    images?: any[]
-    key: string
-    toolUseId?: string
-  }> = []
+  const groupedContent = useMemo(() => {
+    const grouped: Array<{
+      type: 'text' | 'tool'
+      content: string | Message
+      images?: any[]
+      key: string
+      toolUseId?: string
+    }> = []
 
-  let currentTextGroup = ''
-  let currentTextImages: any[] = []
-  let textGroupStartId: string | number = 0
-  let currentToolUseId: string | undefined = undefined
-  let textGroupCounter = 0 // Counter for unique keys
+    let currentTextGroup = ''
+    let currentTextImages: any[] = []
+    let textGroupStartId: string | number = 0
+    let currentToolUseId: string | undefined = undefined
+    let textGroupCounter = 0 // Counter for unique keys
 
-  const flushTextGroup = () => {
-    if (currentTextGroup.trim()) {
-      groupedContent.push({
-        type: 'text',
-        content: currentTextGroup,
-        images: currentTextImages,
-        key: `text-group-${textGroupCounter}-${textGroupStartId}`, // Use counter + id for uniqueness
-        toolUseId: currentToolUseId
-      })
-      currentTextGroup = ''
-      currentTextImages = []
-      currentToolUseId = undefined
-      textGroupCounter++ // Increment counter
+    const flushTextGroup = () => {
+      if (currentTextGroup.trim()) {
+        grouped.push({
+          type: 'text',
+          content: currentTextGroup,
+          images: currentTextImages,
+          key: `text-group-${textGroupCounter}-${textGroupStartId}`, // Use counter + id for uniqueness
+          toolUseId: currentToolUseId
+        })
+        currentTextGroup = ''
+        currentTextImages = []
+        currentToolUseId = undefined
+        textGroupCounter++ // Increment counter
+      }
     }
-  }
 
-  sortedMessages.forEach((message) => {
-    // Check if message has tool executions
-    const hasToolExecutions = message.toolExecutions && message.toolExecutions.length > 0
+    sortedMessages.forEach((message) => {
+      // Check if message has tool executions
+      const hasToolExecutions = message.toolExecutions && message.toolExecutions.length > 0
 
-    if (hasToolExecutions) {
-      // Message has tool executions - render text first, then tools
+      if (hasToolExecutions) {
+        // Message has tool executions - render text first, then tools
 
-      // Add text if present
-      if (message.text) {
+        // Add text if present
+        if (message.text) {
+          if (!currentTextGroup) {
+            textGroupStartId = typeof message.id === 'number' ? message.id : 0
+          }
+          currentTextGroup += message.text
+          if (message.images && message.images.length > 0) {
+            currentTextImages.push(...message.images)
+          }
+        }
+
+        // Flush text group before tool container
+        flushTextGroup()
+
+        // Add tool execution container
+        grouped.push({
+          type: 'tool',
+          content: message,
+          key: `tool-${message.id}`
+        })
+      } else if (message.text) {
+        // Text-only message - accumulate
         if (!currentTextGroup) {
           textGroupStartId = typeof message.id === 'number' ? message.id : 0
         }
@@ -143,35 +167,18 @@ export const AssistantTurn: React.FC<AssistantTurnProps> = ({ messages, currentR
         if (message.images && message.images.length > 0) {
           currentTextImages.push(...message.images)
         }
+        // Track toolUseId for this text message
+        if (message.toolUseId && !currentToolUseId) {
+          currentToolUseId = message.toolUseId
+        }
       }
+    })
 
-      // Flush text group before tool container
-      flushTextGroup()
+    // Flush any remaining text
+    flushTextGroup()
 
-      // Add tool execution container
-      groupedContent.push({
-        type: 'tool',
-        content: message,
-        key: `tool-${message.id}`
-      })
-    } else if (message.text) {
-      // Text-only message - accumulate
-      if (!currentTextGroup) {
-        textGroupStartId = typeof message.id === 'number' ? message.id : 0
-      }
-      currentTextGroup += message.text
-      if (message.images && message.images.length > 0) {
-        currentTextImages.push(...message.images)
-      }
-      // Track toolUseId for this text message
-      if (message.toolUseId && !currentToolUseId) {
-        currentToolUseId = message.toolUseId
-      }
-    }
-  })
-
-  // Flush any remaining text
-  flushTextGroup()
+    return grouped
+  }, [sortedMessages])
 
   // Find latency metrics and token usage from the messages
   const latencyMetrics = sortedMessages.find(msg => msg.latencyMetrics)?.latencyMetrics
@@ -240,7 +247,7 @@ export const AssistantTurn: React.FC<AssistantTurnProps> = ({ messages, currentR
                     <div className="mt-4 space-y-3">
                       {item.images.map((image, idx) => (
                         <div key={idx} className="relative group">
-                          <img
+                          <LazyImage
                             src={`data:image/${image.format};base64,${image.data}`}
                             alt={`Generated image ${idx + 1}`}
                             className="max-w-full h-auto rounded-xl border border-slate-200 shadow-sm"
@@ -341,4 +348,33 @@ export const AssistantTurn: React.FC<AssistantTurnProps> = ({ messages, currentR
       </div>
     </div>
   )
-}
+}, (prevProps, nextProps) => {
+  // Only re-render if messages or reasoning actually changed
+  const messagesEqual = prevProps.messages.length === nextProps.messages.length &&
+    prevProps.messages.every((msg, idx) => {
+      const nextMsg = nextProps.messages[idx]
+      if (!nextMsg) return false
+
+      // Compare basic properties
+      if (msg.id !== nextMsg.id || msg.text !== nextMsg.text) return false
+
+      // Compare latencyMetrics (important for showing metrics after streaming)
+      const latencyChanged =
+        msg.latencyMetrics?.timeToFirstToken !== nextMsg.latencyMetrics?.timeToFirstToken ||
+        msg.latencyMetrics?.endToEndLatency !== nextMsg.latencyMetrics?.endToEndLatency
+
+      // Compare tokenUsage (important for showing token counts after streaming)
+      const tokenUsageChanged =
+        msg.tokenUsage?.inputTokens !== nextMsg.tokenUsage?.inputTokens ||
+        msg.tokenUsage?.outputTokens !== nextMsg.tokenUsage?.outputTokens
+
+      // If metrics changed, we need to re-render
+      if (latencyChanged || tokenUsageChanged) return false
+
+      return true
+    })
+
+  const reasoningEqual = prevProps.currentReasoning?.text === nextProps.currentReasoning?.text
+
+  return messagesEqual && reasoningEqual && prevProps.sessionId === nextProps.sessionId
+})

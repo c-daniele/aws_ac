@@ -1,6 +1,26 @@
+const withBundleAnalyzer = require('@next/bundle-analyzer')({
+  enabled: process.env.ANALYZE === 'true',
+})
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
+
+  // Remove console logs in production (keep error and warn)
+  compiler: {
+    removeConsole: process.env.NODE_ENV === 'production' ? {
+      exclude: ['error', 'warn']
+    } : false,
+  },
+
+  // Strict mode for better React warnings in development
+  reactStrictMode: true,
+
+  // Experimental optimizations
+  experimental: {
+    optimizePackageImports: ['lucide-react', 'recharts'],
+  },
+
   async headers() {
     // Get allowed origins from environment variable (same as backend CORS_ORIGINS)
     // This ensures consistent security policy between frontend CSP and backend CORS
@@ -70,4 +90,4 @@ const nextConfig = {
   }
 }
 
-module.exports = nextConfig
+module.exports = withBundleAnalyzer(nextConfig)

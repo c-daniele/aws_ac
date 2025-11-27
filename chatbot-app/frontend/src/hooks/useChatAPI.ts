@@ -6,6 +6,7 @@ import logger from '@/utils/logger'
 import { fetchAuthSession } from 'aws-amplify/auth'
 import { apiGet, apiPost } from '@/lib/api-client'
 import { buildToolMaps, createToolExecution } from '@/utils/messageParser'
+import { isSessionTimedOut, getLastActivity, updateLastActivity, clearSessionData } from '@/config/session'
 
 interface UseChatAPIProps {
   backendUrl: string
@@ -46,15 +47,39 @@ export const useChatAPI = ({
   const [sessionId, setSessionId] = useState<string | null>(null)
   const sessionIdRef = useRef<string | null>(null)
 
-  // Restore last session on page load
+  // Restore last session on page load (with timeout check)
   useEffect(() => {
     const lastSessionId = sessionStorage.getItem('chat-session-id')
+    const lastActivityTime = getLastActivity()
 
-    if (lastSessionId) {
+    if (lastSessionId && lastActivityTime) {
+      // Check if session has timed out
+      if (isSessionTimedOut(lastActivityTime)) {
+        const minutesSinceActivity = (Date.now() - lastActivityTime) / 1000 / 60
+        console.log(`[Session] Session timed out after ${minutesSinceActivity.toFixed(1)} minutes of inactivity`)
+        console.log(`[Session] Starting new session...`)
+
+        // Clear timed-out session
+        clearSessionData()
+        setSessionId(null)
+        sessionIdRef.current = null
+      } else {
+        // Session is still valid - restore it
+        const minutesSinceActivity = (Date.now() - lastActivityTime) / 1000 / 60
+        console.log(`[Session] Restoring session: ${lastSessionId} (${minutesSinceActivity.toFixed(1)} minutes since last activity)`)
+
+        setSessionId(lastSessionId)
+        sessionIdRef.current = lastSessionId
+        // Note: loadSession will be called by useChat hook
+      }
+    } else if (lastSessionId) {
+      // Session ID exists but no activity timestamp - restore session
+      console.log(`[Session] Restoring session without activity timestamp: ${lastSessionId}`)
       setSessionId(lastSessionId)
       sessionIdRef.current = lastSessionId
-      // Note: loadSession will be called by useChat hook
+      updateLastActivity() // Set activity timestamp for future
     } else {
+      // No session to restore
       setSessionId(null)
       sessionIdRef.current = null
     }
@@ -174,7 +199,7 @@ export const useChatAPI = ({
       setMessages([])
       setSessionId(null)
       sessionIdRef.current = null
-      sessionStorage.removeItem('chat-session-id')
+      clearSessionData() // Clear session ID and last activity timestamp
 
       return true
     } catch (error) {
@@ -189,6 +214,9 @@ export const useChatAPI = ({
     onSuccess?: () => void,
     onError?: (error: string) => void
   ) => {
+    // Update last activity timestamp (for session timeout tracking)
+    updateLastActivity()
+
     // Abort any existing request
     if (abortControllerRef.current) {
       abortControllerRef.current.abort()
