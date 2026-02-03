@@ -288,6 +288,8 @@ export class ChatbotStack extends cdk.Stack {
               `GOOGLE_MAPS_SECRET=$(aws secretsmanager get-secret-value --secret-id "${projectName}/mcp/google-maps-credentials" --region ${this.region} --query SecretString --output text || echo "{}")`,
               `GOOGLE_MAPS_API_KEY=$(echo $GOOGLE_MAPS_SECRET | jq -r '.api_key // empty')`,
               'echo "Google Maps API Key: ${GOOGLE_MAPS_API_KEY:0:10}..." # Show first 10 chars only for security',
+              `APP_VERSION="${process.env.NEXT_PUBLIC_APP_VERSION || '0.0.0'}"`,
+              'echo "App Version: $APP_VERSION"',
             ],
           },
           build: {
@@ -299,6 +301,7 @@ export class ChatbotStack extends cdk.Stack {
               '--build-arg NEXT_PUBLIC_COGNITO_USER_POOL_CLIENT_ID=$COGNITO_CLIENT_ID ' +
               '--build-arg NEXT_PUBLIC_STREAMING_API_URL=$ALB_DNS ' +
               '--build-arg NEXT_PUBLIC_GOOGLE_MAPS_EMBED_API_KEY=$GOOGLE_MAPS_API_KEY ' +
+              '--build-arg NEXT_PUBLIC_APP_VERSION=$APP_VERSION ' +
               '-t frontend:latest .',
               `docker tag frontend:latest ${frontendRepository.repositoryUri}:latest`,
             ],
