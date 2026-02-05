@@ -22,7 +22,11 @@ from agent.config.prompt_builder import (
 
 # AgentCore Memory integration (optional, only for cloud deployment)
 try:
-    from bedrock_agentcore.memory.integrations.strands.config import AgentCoreMemoryConfig, RetrievalConfig
+    from bedrock_agentcore.memory.integrations.strands.config import (
+        AgentCoreMemoryConfig,
+        RetrievalConfig,
+    )
+
     AGENTCORE_MEMORY_AVAILABLE = True
 except ImportError:
     AGENTCORE_MEMORY_AVAILABLE = False
@@ -85,7 +89,7 @@ class ChatAgent(BaseAgent):
         caching_enabled: Optional[bool] = None,
         compaction_enabled: Optional[bool] = None,
         use_null_conversation_manager: Optional[bool] = None,
-        agent_id: Optional[str] = None
+        agent_id: Optional[str] = None,
     ):
         """
         Initialize ChatAgent with specific configuration
@@ -108,7 +112,11 @@ class ChatAgent(BaseAgent):
 
         # Initialize Strands agent placeholder
         self.agent = None
-        self.use_null_conversation_manager = use_null_conversation_manager if use_null_conversation_manager is not None else False
+        self.use_null_conversation_manager = (
+            use_null_conversation_manager
+            if use_null_conversation_manager is not None
+            else False
+        )
 
         # Call BaseAgent init (handles tools, session_manager)
         super().__init__(
@@ -127,11 +135,11 @@ class ChatAgent(BaseAgent):
 
     def _build_system_prompt(self) -> Any:
         """Build text-based system prompt using prompt_builder"""
-        return build_text_system_prompt(
-            enabled_tools=self.enabled_tools
-        )
+        return build_text_system_prompt(enabled_tools=self.enabled_tools)
 
-    def _get_memory_strategy_ids(self, memory_id: str, aws_region: str) -> Dict[str, str]:
+    def _get_memory_strategy_ids(
+        self, memory_id: str, aws_region: str
+    ) -> Dict[str, str]:
         """Get Memory Strategy IDs from AgentCore Memory with global caching."""
         global _cached_strategy_ids
 
@@ -141,19 +149,24 @@ class ChatAgent(BaseAgent):
         import boto3
 
         try:
-            gmcp = boto3.client('bedrock-agentcore-control', region_name=aws_region)
+            gmcp = boto3.client("bedrock-agentcore-control", region_name=aws_region)
             response = gmcp.get_memory(memoryId=memory_id)
-            memory = response['memory']
-            strategies = memory.get('strategies', memory.get('memoryStrategies', []))
+            memory = response["memory"]
+            strategies = memory.get("strategies", memory.get("memoryStrategies", []))
 
             strategy_map = {
-                s.get('type', s.get('memoryStrategyType', '')): s.get('strategyId', s.get('memoryStrategyId', ''))
+                s.get("type", s.get("memoryStrategyType", "")): s.get(
+                    "strategyId", s.get("memoryStrategyId", "")
+                )
                 for s in strategies
-                if s.get('type', s.get('memoryStrategyType', '')) and s.get('strategyId', s.get('memoryStrategyId', ''))
+                if s.get("type", s.get("memoryStrategyType", ""))
+                and s.get("strategyId", s.get("memoryStrategyId", ""))
             }
 
             _cached_strategy_ids = strategy_map
-            logger.info(f"[StrategyCache] Loaded {len(strategy_map)} strategy IDs: {list(strategy_map.keys())}")
+            logger.info(
+                f"[StrategyCache] Loaded {len(strategy_map)} strategy IDs: {list(strategy_map.keys())}"
+            )
 
             return strategy_map
         except Exception as e:
@@ -167,7 +180,7 @@ class ChatAgent(BaseAgent):
             "temperature": self.temperature,
             "system_prompt": system_prompt_to_string(self.system_prompt),
             "system_prompt_blocks": len(self.system_prompt),
-            "caching_enabled": self.caching_enabled
+            "caching_enabled": self.caching_enabled,
         }
 
     def create_agent(self):
@@ -180,18 +193,18 @@ class ChatAgent(BaseAgent):
             # Configure retry for transient Bedrock errors (serviceUnavailableException)
             retry_config = Config(
                 retries={
-                    'max_attempts': 10,
-                    'mode': 'adaptive'  # Adaptive retry with exponential backoff
+                    "max_attempts": 10,
+                    "mode": "adaptive",  # Adaptive retry with exponential backoff
                 },
                 connect_timeout=30,
-                read_timeout=300  # Increased to 5 minutes for complex Code Interpreter operations
+                read_timeout=300,  # Increased to 5 minutes for complex Code Interpreter operations
             )
 
             # Create model configuration
             model_config = {
                 "model_id": config["model_id"],
                 "temperature": config.get("temperature", 0.7),
-                "boto_client_config": retry_config
+                "boto_client_config": retry_config,
             }
 
             # Add CacheConfig if caching is enabled (strands-agents 1.24.0+)
@@ -217,36 +230,55 @@ class ChatAgent(BaseAgent):
                 "tools": self.tools,
                 "session_manager": self.session_manager,
                 "hooks": hooks if hooks else None,
-                "agent_id": "default"  # Fixed agent_id for state persistence across requests
+                "agent_id": "default",  # Fixed agent_id for state persistence across requests
             }
 
             # Use NullConversationManager if requested (disables Strands' default sliding window)
             if self.use_null_conversation_manager:
                 from strands.agent.conversation_manager import NullConversationManager
+
                 agent_kwargs["conversation_manager"] = NullConversationManager()
-                logger.debug("Using NullConversationManager (no context manipulation by Strands)")
+                logger.debug(
+                    "Using NullConversationManager (no context manipulation by Strands)"
+                )
 
             self.agent = Agent(**agent_kwargs)
 
             # Calculate total characters for logging
-            total_chars = sum(len(block.get("text", "")) for block in self.system_prompt)
+            total_chars = sum(
+                len(block.get("text", "")) for block in self.system_prompt
+            )
             logger.debug(f"Agent created with {len(self.tools)} tools")
-            logger.debug(f"System prompt: {len(self.system_prompt)} content blocks, {total_chars} characters")
+            logger.debug(
+                f"System prompt: {len(self.system_prompt)} content blocks, {total_chars} characters"
+            )
             logger.debug(f"Session Manager: {type(self.session_manager).__name__}")
 
-            if AGENTCORE_MEMORY_AVAILABLE and os.environ.get('MEMORY_ID'):
+            if AGENTCORE_MEMORY_AVAILABLE and os.environ.get("MEMORY_ID"):
                 logger.debug(f"   • Session: {self.session_id}, User: {self.user_id}")
-                logger.debug(f"   • Short-term memory: Conversation history (90 days retention)")
-                logger.debug(f"   • Long-term memory: User preferences and facts across sessions")
+                logger.debug(
+                    f"   • Short-term memory: Conversation history (90 days retention)"
+                )
+                logger.debug(
+                    f"   • Long-term memory: User preferences and facts across sessions"
+                )
             else:
                 logger.debug(f"   • Session: {self.session_id}")
-                logger.debug(f"   • File-based persistence: {self.session_manager.storage_dir}")
+                logger.debug(
+                    f"   • File-based persistence: {self.session_manager.storage_dir}"
+                )
 
         except Exception as e:
             logger.error(f"Error creating agent: {e}")
             raise
 
-    async def stream_async(self, message: str, session_id: str = None, files: Optional[List] = None, selected_artifact_id: Optional[str] = None) -> AsyncGenerator[str, None]:
+    async def stream_async(
+        self,
+        message: str,
+        session_id: str = None,
+        files: Optional[List] = None,
+        selected_artifact_id: Optional[str] = None,
+    ) -> AsyncGenerator[str, None]:
         """
         Stream responses using StreamEventProcessor
 
@@ -260,12 +292,12 @@ class ChatAgent(BaseAgent):
             self.create_agent()
 
         # Set SESSION_ID for browser session isolation (each conversation has isolated browser)
-        os.environ['SESSION_ID'] = self.session_id
-        os.environ['USER_ID'] = self.user_id or self.session_id
+        os.environ["SESSION_ID"] = self.session_id
+        os.environ["USER_ID"] = self.user_id or self.session_id
 
         try:
             # Reset context token tracking for new turn
-            if hasattr(self.session_manager, 'reset_context_token_tracking'):
+            if hasattr(self.session_manager, "reset_context_token_tracking"):
                 self.session_manager.reset_context_token_tracking()
 
             logger.debug(f"Streaming message: {message[:50]}...")
@@ -286,17 +318,17 @@ class ChatAgent(BaseAgent):
                 "session_id": self.session_id,
                 "user_id": self.user_id,
                 "model_id": self.model_id,
-                "session_manager": self.session_manager  # For tools that need to persist state (e.g., research artifacts)
+                "session_manager": self.session_manager,  # For tools that need to persist state (e.g., research artifacts)
             }
 
             # Add uploaded files to invocation_state (for tool access)
             if uploaded_files:
-                invocation_state['uploaded_files'] = uploaded_files
+                invocation_state["uploaded_files"] = uploaded_files
                 logger.debug(f"Added {len(uploaded_files)} file(s) to invocation_state")
 
             # Add selected artifact ID to invocation_state (for artifact editor tool)
             if selected_artifact_id:
-                invocation_state['selected_artifact_id'] = selected_artifact_id
+                invocation_state["selected_artifact_id"] = selected_artifact_id
                 logger.debug(f"Selected artifact: {selected_artifact_id}")
 
             # Use stream processor to handle Strands agent streaming
@@ -305,7 +337,7 @@ class ChatAgent(BaseAgent):
                 prompt,  # Can be str or list[ContentBlock]
                 file_paths=None,
                 session_id=self.session_id,
-                invocation_state=invocation_state
+                invocation_state=invocation_state,
             ):
                 yield event
 
@@ -314,32 +346,37 @@ class ChatAgent(BaseAgent):
 
         except Exception as e:
             import traceback
+
             logger.error(f"Error in stream_async: {e}")
             logger.error(f"Traceback: {traceback.format_exc()}")
 
             # Send error event
             import json
-            error_event = {
-                "type": "error",
-                "message": str(e)
-            }
+
+            error_event = {"type": "error", "message": str(e)}
             yield f"data: {json.dumps(error_event)}\n\n"
 
     def _update_compaction_state(self):
         """Update compaction state after turn completion (if using CompactingSessionManager)."""
-        if not hasattr(self.session_manager, 'update_after_turn'):
+        if not hasattr(self.session_manager, "update_after_turn"):
             return
 
         try:
             # Get last LLM call's input tokens from stream processor
             context_tokens = self.stream_processor.last_llm_input_tokens
-            logger.debug(f"_update_compaction_state: context_tokens={context_tokens:,} (from last LLM call)")
+            logger.debug(
+                f"_update_compaction_state: context_tokens={context_tokens:,} (from last LLM call)"
+            )
 
             if context_tokens > 0:
-                self.session_manager.update_after_turn(context_tokens, self.agent.agent_id)
+                self.session_manager.update_after_turn(
+                    context_tokens, self.agent.agent_id
+                )
                 logger.debug(f"Compaction updated: context={context_tokens:,} tokens")
             else:
-                logger.debug(f"Skipping compaction: context_tokens=0 (no token data from stream processor)")
+                logger.debug(
+                    f"Skipping compaction: context_tokens=0 (no token data from stream processor)"
+                )
         except Exception as e:
             logger.error(f"Compaction update failed: {e}")
 
@@ -353,47 +390,56 @@ class ChatAgent(BaseAgent):
         import re
 
         # First, replace underscores and spaces with hyphens
-        sanitized = filename.replace('_', '-').replace(' ', '-')
+        sanitized = filename.replace("_", "-").replace(" ", "-")
 
         # Keep only allowed characters: alphanumeric, hyphens, parentheses, square brackets
-        sanitized = re.sub(r'[^a-zA-Z0-9\-\(\)\[\]]', '', sanitized)
+        sanitized = re.sub(r"[^a-zA-Z0-9\-\(\)\[\]]", "", sanitized)
 
         # Replace consecutive hyphens with single hyphen
-        sanitized = re.sub(r'\-+', '-', sanitized)
+        sanitized = re.sub(r"\-+", "-", sanitized)
 
         # Trim hyphens from start/end
-        sanitized = sanitized.strip('-')
+        sanitized = sanitized.strip("-")
 
         # If name becomes empty, use default
         if not sanitized:
-            sanitized = 'document'
+            sanitized = "document"
 
         return sanitized
 
     def _get_code_interpreter_id(self) -> Optional[str]:
         """Get Code Interpreter ID from environment or Parameter Store"""
         # Check environment variable first
-        code_interpreter_id = os.getenv('CODE_INTERPRETER_ID')
+        code_interpreter_id = os.getenv("CODE_INTERPRETER_ID")
         if code_interpreter_id:
-            logger.debug(f"Found CODE_INTERPRETER_ID in environment: {code_interpreter_id}")
+            logger.debug(
+                f"Found CODE_INTERPRETER_ID in environment: {code_interpreter_id}"
+            )
             return code_interpreter_id
 
         # Try Parameter Store
         try:
             import boto3
-            project_name = os.getenv('PROJECT_NAME', 'strands-agent-chatbot')
-            environment = os.getenv('ENVIRONMENT', 'dev')
-            region = os.getenv('AWS_REGION', 'us-west-2')
+
+            project_name = os.getenv("PROJECT_NAME", "strands-agent-chatbot")
+            environment = os.getenv("ENVIRONMENT", "dev")
+            region = os.getenv("AWS_REGION", "us-west-2")
             param_name = f"/{project_name}/{environment}/agentcore/code-interpreter-id"
 
-            logger.debug(f"Checking Parameter Store for Code Interpreter ID: {param_name}")
-            ssm = boto3.client('ssm', region_name=region)
+            logger.debug(
+                f"Checking Parameter Store for Code Interpreter ID: {param_name}"
+            )
+            ssm = boto3.client("ssm", region_name=region)
             response = ssm.get_parameter(Name=param_name)
-            code_interpreter_id = response['Parameter']['Value']
-            logger.debug(f"Found CODE_INTERPRETER_ID in Parameter Store: {code_interpreter_id}")
+            code_interpreter_id = response["Parameter"]["Value"]
+            logger.debug(
+                f"Found CODE_INTERPRETER_ID in Parameter Store: {code_interpreter_id}"
+            )
             return code_interpreter_id
         except Exception as e:
-            logger.warning(f"CODE_INTERPRETER_ID not found in env or Parameter Store: {e}")
+            logger.warning(
+                f"CODE_INTERPRETER_ID not found in env or Parameter Store: {e}"
+            )
             return None
 
     def _store_files_by_type(
@@ -402,18 +448,23 @@ class ChatAgent(BaseAgent):
         code_interpreter,
         extensions: List[str],
         manager_class,
-        document_type: str
+        document_type: str,
     ):
         """Store files of specific type to workspace"""
         # Debug: log what we're filtering
-        logger.debug(f"Filtering {len(uploaded_files)} files for {document_type} (extensions: {extensions})")
+        logger.debug(
+            f"Filtering {len(uploaded_files)} files for {document_type} (extensions: {extensions})"
+        )
         for f in uploaded_files:
-            logger.debug(f"   - {f['filename']} (matches: {any(f['filename'].lower().endswith(ext) for ext in extensions)})")
+            logger.debug(
+                f"   - {f['filename']} (matches: {any(f['filename'].lower().endswith(ext) for ext in extensions)})"
+            )
 
         # Filter files by extensions
         filtered_files = [
-            f for f in uploaded_files
-            if any(f['filename'].lower().endswith(ext) for ext in extensions)
+            f
+            for f in uploaded_files
+            if any(f["filename"].lower().endswith(ext) for ext in extensions)
         ]
 
         logger.debug(f"Filtered {len(filtered_files)} {document_type} file(s)")
@@ -427,19 +478,21 @@ class ChatAgent(BaseAgent):
         # Store each file
         for file_info in filtered_files:
             try:
-                filename = file_info['filename']
-                file_bytes = file_info['bytes']
+                filename = file_info["filename"]
+                file_bytes = file_info["bytes"]
 
                 # Sync to both S3 and Code Interpreter
                 doc_manager.sync_to_both(
                     code_interpreter,
                     filename,
                     file_bytes,
-                    metadata={'auto_stored': 'true'}
+                    metadata={"auto_stored": "true"},
                 )
                 logger.debug(f"Auto-stored {document_type}: {filename}")
             except Exception as e:
-                logger.error(f"Failed to auto-store {document_type} file {filename}: {e}")
+                logger.error(
+                    f"Failed to auto-store {document_type} file {filename}: {e}"
+                )
 
     def _auto_store_files(self, uploaded_files: List[Dict[str, Any]]):
         """Automatically store all uploaded files to S3 workspace (unified orchestrator)"""
@@ -453,42 +506,44 @@ class ChatAgent(BaseAgent):
                 WordManager,
                 ExcelManager,
                 PowerPointManager,
-                ImageManager
+                ImageManager,
             )
             from bedrock_agentcore.tools.code_interpreter_client import CodeInterpreter
 
             # Get Code Interpreter ID
             code_interpreter_id = self._get_code_interpreter_id()
             if not code_interpreter_id:
-                logger.warning("Cannot auto-store files: CODE_INTERPRETER_ID not configured")
+                logger.warning(
+                    "Cannot auto-store files: CODE_INTERPRETER_ID not configured"
+                )
                 return
 
             # Configuration for file types
             file_type_configs = [
                 {
-                    'extensions': ['.docx'],
-                    'manager_class': WordManager,
-                    'document_type': 'Word document'
+                    "extensions": [".docx"],
+                    "manager_class": WordManager,
+                    "document_type": "Word document",
                 },
                 {
-                    'extensions': ['.xlsx'],
-                    'manager_class': ExcelManager,
-                    'document_type': 'Excel spreadsheet'
+                    "extensions": [".xlsx"],
+                    "manager_class": ExcelManager,
+                    "document_type": "Excel spreadsheet",
                 },
                 {
-                    'extensions': ['.pptx'],
-                    'manager_class': PowerPointManager,
-                    'document_type': 'PowerPoint presentation'
+                    "extensions": [".pptx"],
+                    "manager_class": PowerPointManager,
+                    "document_type": "PowerPoint presentation",
                 },
                 {
-                    'extensions': ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'],
-                    'manager_class': ImageManager,
-                    'document_type': 'image'
-                }
+                    "extensions": [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"],
+                    "manager_class": ImageManager,
+                    "document_type": "image",
+                },
             ]
 
             # Start Code Interpreter (single session for all file types)
-            region = os.getenv('AWS_REGION', 'us-west-2')
+            region = os.getenv("AWS_REGION", "us-west-2")
             code_interpreter = CodeInterpreter(region)
             code_interpreter.start(identifier=code_interpreter_id)
 
@@ -498,9 +553,9 @@ class ChatAgent(BaseAgent):
                     self._store_files_by_type(
                         uploaded_files,
                         code_interpreter,
-                        config['extensions'],
-                        config['manager_class'],
-                        config['document_type']
+                        config["extensions"],
+                        config["manager_class"],
+                        config["document_type"],
                     )
             finally:
                 code_interpreter.stop()
@@ -526,7 +581,9 @@ class ChatAgent(BaseAgent):
             return message, []
 
         # Check if using AgentCore Memory (cloud mode)
-        is_cloud_mode = os.environ.get('MEMORY_ID') is not None and AGENTCORE_MEMORY_AVAILABLE
+        is_cloud_mode = (
+            os.environ.get("MEMORY_ID") is not None and AGENTCORE_MEMORY_AVAILABLE
+        )
 
         # Build ContentBlock list for multimodal input
         content_blocks = []
@@ -541,6 +598,49 @@ class ChatAgent(BaseAgent):
         # Track files that will use workspace tools (not sent as ContentBlock)
         workspace_only_files = []
 
+        # Check if knowledge_base_tools is enabled (for catalog uploads)
+        # enabled_tools can contain either group IDs or individual tool IDs
+        KB_TOOL_IDS = {
+            "knowledge_base_tools",  # Group ID
+            "upload_to_catalog",  # Individual tool ID
+            "create_catalog",
+            "list_catalogs",
+            "list_catalog_documents",
+            "select_catalog",
+            "query_catalog",
+            "get_indexing_status",
+            "delete_catalog_document",
+            "download_from_catalog",
+            "delete_catalog",
+        }
+
+        # Debug: Log enabled_tools for KB detection
+        logger.info(f"[_build_prompt] enabled_tools={self.enabled_tools}")
+
+        kb_tools_enabled = bool(
+            self.enabled_tools and KB_TOOL_IDS.intersection(self.enabled_tools)
+        )
+
+        # Debug: Log KB detection result
+        if self.enabled_tools:
+            matched_kb_tools = KB_TOOL_IDS.intersection(self.enabled_tools)
+            logger.info(
+                f"[_build_prompt] KB tool intersection: {matched_kb_tools}, kb_tools_enabled={kb_tools_enabled}"
+            )
+        else:
+            logger.info(
+                f"[_build_prompt] enabled_tools is None/empty, kb_tools_enabled={kb_tools_enabled}"
+            )
+
+        if kb_tools_enabled:
+            logger.info(
+                f"[KB Mode] Knowledge base tools detected - will NOT send KB-compatible files as ContentBlocks"
+            )
+
+        # KB-supported file extensions (these should not be sent as ContentBlocks when KB tools are enabled)
+        # because upload_to_catalog retrieves content from invocation_state
+        KB_SUPPORTED_EXTENSIONS = (".pdf", ".docx", ".txt", ".md", ".csv")
+
         # Add each file as appropriate ContentBlock
         for file in files:
             content_type = file.content_type.lower()
@@ -550,77 +650,112 @@ class ChatAgent(BaseAgent):
             file_bytes = base64.b64decode(file.bytes)
 
             # Sanitize filename for consistency
-            if '.' in file.filename:
-                name_parts = file.filename.rsplit('.', 1)
-                sanitized_full_name = self._sanitize_filename(name_parts[0]) + '.' + name_parts[1]
+            if "." in file.filename:
+                name_parts = file.filename.rsplit(".", 1)
+                sanitized_full_name = (
+                    self._sanitize_filename(name_parts[0]) + "." + name_parts[1]
+                )
             else:
                 sanitized_full_name = self._sanitize_filename(file.filename)
 
             # Store for tool invocation_state with sanitized filename
-            uploaded_files.append({
-                'filename': sanitized_full_name,
-                'bytes': file_bytes,
-                'content_type': file.content_type
-            })
+            uploaded_files.append(
+                {
+                    "filename": sanitized_full_name,
+                    "bytes": file_bytes,
+                    "content_type": file.content_type,
+                }
+            )
 
             # Track sanitized filename for agent's reference
             sanitized_filenames.append(sanitized_full_name)
 
             # Determine file type and create appropriate ContentBlock
-            if content_type.startswith("image/") or filename.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
+            if content_type.startswith("image/") or filename.endswith(
+                (".png", ".jpg", ".jpeg", ".gif", ".webp")
+            ):
                 # Image content - always send as ContentBlock
                 image_format = self._get_image_format(content_type, filename)
-                content_blocks.append({
-                    "image": {
-                        "format": image_format,
-                        "source": {
-                            "bytes": file_bytes
-                        }
-                    }
-                })
+                content_blocks.append(
+                    {"image": {"format": image_format, "source": {"bytes": file_bytes}}}
+                )
                 logger.debug(f"Added image: {filename} (format: {image_format})")
 
             elif filename.endswith(".pptx"):
                 # PowerPoint - always use workspace
                 workspace_only_files.append(sanitized_full_name)
-                logger.debug(f"PowerPoint presentation uploaded: {sanitized_full_name} (will be stored in workspace)")
+                logger.debug(
+                    f"PowerPoint presentation uploaded: {sanitized_full_name} (will be stored in workspace)"
+                )
+
+            elif filename.endswith(KB_SUPPORTED_EXTENSIONS) and kb_tools_enabled:
+                # KB-supported files when knowledge_base_tools is enabled:
+                # Do NOT send as ContentBlock - the upload_to_catalog tool will retrieve
+                # file content from invocation_state['uploaded_files']
+                # This prevents context window overflow for large documents
+                workspace_only_files.append(sanitized_full_name)
+                file_size_kb = len(file_bytes) / 1024
+                logger.info(
+                    f"[KB Mode] {sanitized_full_name} ({file_size_kb:.1f} KB) available for catalog upload - "
+                    f"NOT sent as ContentBlock to prevent context overflow"
+                )
 
             elif filename.endswith((".docx", ".xlsx")):
                 # Word/Excel documents - use workspace in cloud mode
                 if is_cloud_mode:
                     workspace_only_files.append(sanitized_full_name)
-                    logger.debug(f"[Cloud Mode] {sanitized_full_name} stored in workspace")
+                    logger.debug(
+                        f"[Cloud Mode] {sanitized_full_name} stored in workspace"
+                    )
                 else:
                     # Local mode - can send as document ContentBlock
                     doc_format = self._get_document_format(filename)
-                    name_without_ext = sanitized_full_name.rsplit('.', 1)[0] if '.' in sanitized_full_name else sanitized_full_name
+                    name_without_ext = (
+                        sanitized_full_name.rsplit(".", 1)[0]
+                        if "." in sanitized_full_name
+                        else sanitized_full_name
+                    )
 
-                    content_blocks.append({
+                    content_blocks.append(
+                        {
+                            "document": {
+                                "format": doc_format,
+                                "name": name_without_ext,
+                                "source": {"bytes": file_bytes},
+                            }
+                        }
+                    )
+                    logger.debug(
+                        f"Added document: {file.filename} -> {sanitized_full_name} (format: {doc_format})"
+                    )
+
+            elif filename.endswith(
+                (".pdf", ".csv", ".doc", ".xls", ".html", ".txt", ".md")
+            ):
+                # Other documents - send as ContentBlock
+                # NOTE: For large files, this can cause context overflow!
+                # If KB tools are enabled, these file types would be caught earlier
+                doc_format = self._get_document_format(filename)
+                name_without_ext = (
+                    sanitized_full_name.rsplit(".", 1)[0]
+                    if "." in sanitized_full_name
+                    else sanitized_full_name
+                )
+
+                content_blocks.append(
+                    {
                         "document": {
                             "format": doc_format,
                             "name": name_without_ext,
-                            "source": {
-                                "bytes": file_bytes
-                            }
-                        }
-                    })
-                    logger.debug(f"Added document: {file.filename} -> {sanitized_full_name} (format: {doc_format})")
-
-            elif filename.endswith((".pdf", ".csv", ".doc", ".xls", ".html", ".txt", ".md")):
-                # Other documents - send as ContentBlock
-                doc_format = self._get_document_format(filename)
-                name_without_ext = sanitized_full_name.rsplit('.', 1)[0] if '.' in sanitized_full_name else sanitized_full_name
-
-                content_blocks.append({
-                    "document": {
-                        "format": doc_format,
-                        "name": name_without_ext,
-                        "source": {
-                            "bytes": file_bytes
+                            "source": {"bytes": file_bytes},
                         }
                     }
-                })
-                logger.debug(f"Added document: {file.filename} -> {sanitized_full_name} (format: {doc_format})")
+                )
+                file_size_kb = len(file_bytes) / 1024
+                logger.info(
+                    f"[File Processing] Added {filename} ({file_size_kb:.1f} KB) as ContentBlock - "
+                    f"WARNING: KB tools not enabled, large files may cause context overflow"
+                )
 
             else:
                 logger.warning(f"Unsupported file type: {filename} ({content_type})")
@@ -628,10 +763,24 @@ class ChatAgent(BaseAgent):
         # Add file hints to text block
         if sanitized_filenames:
             # Categorize files
-            pptx_files = [fn for fn in sanitized_filenames if fn.endswith('.pptx')]
-            docx_files = [fn for fn in workspace_only_files if fn.endswith('.docx')]
-            xlsx_files = [fn for fn in workspace_only_files if fn.endswith('.xlsx')]
-            attached_files = [fn for fn in sanitized_filenames if fn not in workspace_only_files]
+            pptx_files = [fn for fn in sanitized_filenames if fn.endswith(".pptx")]
+            docx_files = [fn for fn in workspace_only_files if fn.endswith(".docx")]
+            xlsx_files = [fn for fn in workspace_only_files if fn.endswith(".xlsx")]
+
+            # KB-compatible files (for catalog upload)
+            kb_files = (
+                [
+                    fn
+                    for fn in workspace_only_files
+                    if fn.endswith(KB_SUPPORTED_EXTENSIONS) and fn not in docx_files
+                ]
+                if kb_tools_enabled
+                else []
+            )
+
+            attached_files = [
+                fn for fn in sanitized_filenames if fn not in workspace_only_files
+            ]
 
             file_hints_lines = []
 
@@ -640,40 +789,64 @@ class ChatAgent(BaseAgent):
                 file_hints_lines.append("Attached files:")
                 file_hints_lines.extend([f"- {fn}" for fn in attached_files])
 
+            # Add KB-compatible files with catalog upload hints
+            if kb_files:
+                if file_hints_lines:
+                    file_hints_lines.append("")
+                file_hints_lines.append("Files available for catalog upload:")
+                for fn in kb_files:
+                    file_hints_lines.append(
+                        f"- {fn} (use upload_to_catalog(catalog_id, filename='{fn}') to add to a catalog)"
+                    )
+
             # Add workspace-only files with tool hints
             if docx_files:
                 if file_hints_lines:
                     file_hints_lines.append("")
-                word_tools_enabled = self.enabled_tools and 'word_document_tools' in self.enabled_tools
+                word_tools_enabled = (
+                    self.enabled_tools and "word_document_tools" in self.enabled_tools
+                )
                 file_hints_lines.append("Word documents in workspace:")
                 for fn in docx_files:
-                    name_without_ext = fn.rsplit('.', 1)[0] if '.' in fn else fn
+                    name_without_ext = fn.rsplit(".", 1)[0] if "." in fn else fn
                     if word_tools_enabled:
-                        file_hints_lines.append(f"- {fn} (use read_word_document('{name_without_ext}') to view content)")
+                        file_hints_lines.append(
+                            f"- {fn} (use read_word_document('{name_without_ext}') to view content)"
+                        )
                     else:
                         file_hints_lines.append(f"- {fn}")
 
             if xlsx_files:
                 if file_hints_lines:
                     file_hints_lines.append("")
-                excel_tools_enabled = self.enabled_tools and 'excel_spreadsheet_tools' in self.enabled_tools
+                excel_tools_enabled = (
+                    self.enabled_tools
+                    and "excel_spreadsheet_tools" in self.enabled_tools
+                )
                 file_hints_lines.append("Excel spreadsheets in workspace:")
                 for fn in xlsx_files:
-                    name_without_ext = fn.rsplit('.', 1)[0] if '.' in fn else fn
+                    name_without_ext = fn.rsplit(".", 1)[0] if "." in fn else fn
                     if excel_tools_enabled:
-                        file_hints_lines.append(f"- {fn} (use read_excel_spreadsheet('{name_without_ext}') to view content)")
+                        file_hints_lines.append(
+                            f"- {fn} (use read_excel_spreadsheet('{name_without_ext}') to view content)"
+                        )
                     else:
                         file_hints_lines.append(f"- {fn}")
 
             if pptx_files:
                 if file_hints_lines:
                     file_hints_lines.append("")
-                ppt_tools_enabled = self.enabled_tools and 'powerpoint_presentation_tools' in self.enabled_tools
+                ppt_tools_enabled = (
+                    self.enabled_tools
+                    and "powerpoint_presentation_tools" in self.enabled_tools
+                )
                 file_hints_lines.append("PowerPoint presentations in workspace:")
                 for fn in pptx_files:
-                    name_without_ext = fn.rsplit('.', 1)[0] if '.' in fn else fn
+                    name_without_ext = fn.rsplit(".", 1)[0] if "." in fn else fn
                     if ppt_tools_enabled:
-                        file_hints_lines.append(f"- {fn} (use analyze_presentation('{name_without_ext}', verbose=False) to view content)")
+                        file_hints_lines.append(
+                            f"- {fn} (use analyze_presentation('{name_without_ext}', verbose=False) to view content)"
+                        )
                     else:
                         file_hints_lines.append(f"- {fn}")
 
@@ -693,7 +866,11 @@ class ChatAgent(BaseAgent):
         """Determine image format from content type or filename"""
         if "png" in content_type or filename.endswith(".png"):
             return "png"
-        elif "jpeg" in content_type or "jpg" in content_type or filename.endswith((".jpg", ".jpeg")):
+        elif (
+            "jpeg" in content_type
+            or "jpg" in content_type
+            or filename.endswith((".jpg", ".jpeg"))
+        ):
             return "jpeg"
         elif "gif" in content_type or filename.endswith(".gif"):
             return "gif"

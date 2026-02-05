@@ -25,14 +25,14 @@
 
 **Purpose**: CDK infrastructure for S3, Bedrock KB, IAM permissions
 
-- [ ] T001 Add S3 bucket for KB documents in agent-blueprint/agentcore-runtime-stack/lib/agent-runtime-stack.ts
-- [ ] T002 Add S3 Vector Bucket resource (AWS::S3Vectors::VectorBucket) in agent-blueprint/agentcore-runtime-stack/lib/agent-runtime-stack.ts
-- [ ] T003 Add S3 Vector Index resource (float32, 1024 dims, cosine) in agent-blueprint/agentcore-runtime-stack/lib/agent-runtime-stack.ts
-- [ ] T004 Add Bedrock Knowledge Base resource (single shared KB, no default data source) in agent-blueprint/agentcore-runtime-stack/lib/agent-runtime-stack.ts
-- [ ] T005 Add IAM role for Bedrock KB service with S3/S3Vectors/Bedrock model access in agent-blueprint/agentcore-runtime-stack/lib/agent-runtime-stack.ts
-- [ ] T006 Add IAM permissions for application execution role (Retrieve, RetrieveAndGenerate, StartIngestionJob, GetIngestionJob, CreateDataSource, DeleteDataSource) in agent-blueprint/agentcore-runtime-stack/lib/agent-runtime-stack.ts
-- [ ] T007 Add environment variables (KB_ID, KB_DOCS_BUCKET) to ECS task definition in agent-blueprint/agentcore-runtime-stack/lib/agent-runtime-stack.ts
-- [ ] T008 Verify CDK synth completes without errors
+- [X] T001 Add S3 bucket for KB documents in agent-blueprint/agentcore-runtime-stack/lib/agent-runtime-stack.ts
+- [X] T002 Add S3 Vector Bucket resource (AWS::S3Vectors::VectorBucket) in agent-blueprint/agentcore-runtime-stack/lib/agent-runtime-stack.ts
+- [X] T003 Add S3 Vector Index resource (float32, 1024 dims, cosine) in agent-blueprint/agentcore-runtime-stack/lib/agent-runtime-stack.ts
+- [X] T004 Add Bedrock Knowledge Base resource (single shared KB, no default data source) in agent-blueprint/agentcore-runtime-stack/lib/agent-runtime-stack.ts
+- [X] T005 Add IAM role for Bedrock KB service with S3/S3Vectors/Bedrock model access in agent-blueprint/agentcore-runtime-stack/lib/agent-runtime-stack.ts
+- [X] T006 Add IAM permissions for application execution role (Retrieve, RetrieveAndGenerate, StartIngestionJob, GetIngestionJob, CreateDataSource, DeleteDataSource) in agent-blueprint/agentcore-runtime-stack/lib/agent-runtime-stack.ts
+- [X] T007 Add environment variables (KB_ID, KB_DOCS_BUCKET) to ECS task definition in agent-blueprint/agentcore-runtime-stack/lib/agent-runtime-stack.ts
+- [X] T008 Verify CDK synth completes without errors
 
 **Checkpoint**: Infrastructure ready - deploy with `./deploy.sh --runtime`
 
@@ -44,13 +44,13 @@
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T009 Create kb_catalog_manager.py with KBCatalogManager class skeleton in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
-- [ ] T010 Implement DynamoDB client initialization and table reference in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
-- [ ] T011 Implement Bedrock Agent client initialization in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
-- [ ] T012 Implement S3 client initialization and bucket reference in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
-- [ ] T013 Implement helper method _get_user_session_ids() for extracting context in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
-- [ ] T014 Create knowledge_base_tools.py with imports and logger setup in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
-- [ ] T015 Export KB tools in chatbot-app/agentcore/src/builtin_tools/__init__.py
+- [X] T009 Create kb_catalog_manager.py with KBCatalogManager class skeleton in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
+- [X] T010 Implement DynamoDB client initialization and table reference in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
+- [X] T011 Implement Bedrock Agent client initialization in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
+- [X] T012 Implement S3 client initialization and bucket reference in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
+- [X] T013 Implement helper method _get_user_session_ids() for extracting context in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
+- [X] T014 Create knowledge_base_tools.py with imports and logger setup in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
+- [X] T015 Export KB tools in chatbot-app/agentcore/src/builtin_tools/__init__.py
 
 **Checkpoint**: Foundation ready - user story implementation can now begin
 
@@ -64,22 +64,22 @@
 
 ### Implementation for User Story 1
 
-- [ ] T016 [US1] Implement _create_data_source() helper for Bedrock data source creation in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
-- [ ] T017 [US1] Implement create_catalog_record() to store catalog in DynamoDB with data_source_id and s3_prefix in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
-- [ ] T018 [US1] Implement catalog name validation (1-100 chars, alphanumeric + spaces/hyphens, unique per user) in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
-- [ ] T019 [US1] Implement create_catalog tool following contracts/tools-api.md in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
-- [ ] T020 [US1] Implement upload_document() to upload file to S3 with proper path structure ({user_id}/{catalog_id}/) in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
-- [ ] T021 [US1] Implement create_metadata_json() for companion metadata file with user_id, catalog_id, filename in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
-- [ ] T022 [US1] Implement create_document_record() to store document metadata in DynamoDB in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
-- [ ] T023 [US1] Implement start_ingestion() to trigger Bedrock ingestion job for catalog's data source in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
-- [ ] T024 [US1] Implement upload_to_catalog tool following contracts/tools-api.md in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
-- [ ] T025 [US1] Implement get_ingestion_job_status() to check Bedrock ingestion job state in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
-- [ ] T026 [US1] Implement update_document_status() to update DynamoDB document indexing_status in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
-- [ ] T027 [US1] Implement update_catalog_status() to update overall catalog indexing_status in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
-- [ ] T028 [US1] Implement get_indexing_status tool following contracts/tools-api.md in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
-- [ ] T029 [US1] Add error handling for file type validation (pdf, docx, txt, md, csv only) in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
-- [ ] T030 [US1] Add error handling for file size validation (50MB max) in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
-- [ ] T030a [US1] Add duplicate filename detection in upload_to_catalog with replace/rename prompt per edge case in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
+- [X] T016 [US1] Implement _create_data_source() helper for Bedrock data source creation in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
+- [X] T017 [US1] Implement create_catalog_record() to store catalog in DynamoDB with data_source_id and s3_prefix in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
+- [X] T018 [US1] Implement catalog name validation (1-100 chars, alphanumeric + spaces/hyphens, unique per user) in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
+- [X] T019 [US1] Implement create_catalog tool following contracts/tools-api.md in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
+- [X] T020 [US1] Implement upload_document() to upload file to S3 with proper path structure ({user_id}/{catalog_id}/) in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
+- [X] T021 [US1] Implement create_metadata_json() for companion metadata file with user_id, catalog_id, filename in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
+- [X] T022 [US1] Implement create_document_record() to store document metadata in DynamoDB in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
+- [X] T023 [US1] Implement start_ingestion() to trigger Bedrock ingestion job for catalog's data source in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
+- [X] T024 [US1] Implement upload_to_catalog tool following contracts/tools-api.md in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
+- [X] T025 [US1] Implement get_ingestion_job_status() to check Bedrock ingestion job state in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
+- [X] T026 [US1] Implement update_document_status() to update DynamoDB document indexing_status in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
+- [X] T027 [US1] Implement update_catalog_status() to update overall catalog indexing_status in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
+- [X] T028 [US1] Implement get_indexing_status tool following contracts/tools-api.md in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
+- [X] T029 [US1] Add error handling for file type validation (pdf, docx, txt, md, csv only) in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
+- [X] T030 [US1] Add error handling for file size validation (50MB max) in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
+- [X] T030a [US1] Add duplicate filename detection in upload_to_catalog with replace/rename prompt per edge case in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
 
 **Checkpoint**: User Story 1 complete - users can create catalogs, upload documents, and see indexing progress
 
@@ -93,14 +93,14 @@
 
 ### Implementation for User Story 2
 
-- [ ] T031 [US2] Implement set_selected_catalog() to store catalog selection in session state in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
-- [ ] T032 [US2] Implement get_selected_catalog() to retrieve current catalog selection in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
-- [ ] T033 [US2] Implement select_catalog tool following contracts/tools-api.md in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
-- [ ] T034 [US2] Implement query_knowledge_base() using bedrock-agent-runtime retrieve with metadata filters (user_id, catalog_id) in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
-- [ ] T035 [US2] Implement format_citations() to extract and format source references from retrieval results in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
-- [ ] T036 [US2] Implement query_catalog tool following contracts/tools-api.md in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
-- [ ] T037 [US2] Add error handling for no catalog selected case in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
-- [ ] T038 [US2] Add error handling for empty catalog (no indexed documents) case in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
+- [X] T031 [US2] Implement set_selected_catalog() to store catalog selection in session state in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
+- [X] T032 [US2] Implement get_selected_catalog() to retrieve current catalog selection in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
+- [X] T033 [US2] Implement select_catalog tool following contracts/tools-api.md in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
+- [X] T034 [US2] Implement query_knowledge_base() using bedrock-agent-runtime retrieve with metadata filters (user_id, catalog_id) in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
+- [X] T035 [US2] Implement format_citations() to extract and format source references from retrieval results in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
+- [X] T036 [US2] Implement query_catalog tool following contracts/tools-api.md in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
+- [X] T037 [US2] Add error handling for no catalog selected case in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
+- [X] T038 [US2] Add error handling for empty catalog (no indexed documents) case in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
 
 **Checkpoint**: User Story 2 complete - users can query their documents with RAG and receive cited responses
 
@@ -114,15 +114,15 @@
 
 ### Implementation for User Story 3
 
-- [ ] T039 [US3] Implement list_documents_in_catalog() to query DynamoDB for documents with DOCUMENT#{catalog_id}# prefix in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
-- [ ] T040 [US3] Implement list_catalog_documents tool following contracts/tools-api.md in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
-- [ ] T041 [US3] Implement delete_s3_document() to remove document and metadata.json from S3 in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
-- [ ] T042 [US3] Implement delete_document_record() to remove document from DynamoDB in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
-- [ ] T043 [US3] Implement trigger_vector_cleanup() to start re-sync ingestion job to remove orphaned vectors in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
-- [ ] T044 [US3] Implement update_catalog_document_count() to decrement document count after deletion in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
-- [ ] T045 [US3] Implement delete_catalog_document tool following contracts/tools-api.md in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
-- [ ] T045a [US3] Implement generate_download_url() to create presigned S3 URL for document download in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
-- [ ] T045b [US3] Implement download_from_catalog tool following contracts/tools-api.md pattern in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
+- [X] T039 [US3] Implement list_documents_in_catalog() to query DynamoDB for documents with DOCUMENT#{catalog_id}# prefix in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
+- [X] T040 [US3] Implement list_catalog_documents tool following contracts/tools-api.md in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
+- [X] T041 [US3] Implement delete_s3_document() to remove document and metadata.json from S3 in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
+- [X] T042 [US3] Implement delete_document_record() to remove document from DynamoDB in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
+- [X] T043 [US3] Implement trigger_vector_cleanup() to start re-sync ingestion job to remove orphaned vectors in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
+- [X] T044 [US3] Implement update_catalog_document_count() to decrement document count after deletion in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
+- [X] T045 [US3] Implement delete_catalog_document tool following contracts/tools-api.md in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
+- [X] T045a [US3] Implement generate_download_url() to create presigned S3 URL for document download in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
+- [X] T045b [US3] Implement download_from_catalog tool following contracts/tools-api.md pattern in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
 
 **Checkpoint**: User Story 3 complete - users can view document lists and delete individual documents
 
@@ -136,13 +136,13 @@
 
 ### Implementation for User Story 4
 
-- [ ] T046 [US4] Implement list_user_catalogs() to query DynamoDB for catalogs with CATALOG# prefix in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
-- [ ] T047 [US4] Implement list_catalogs tool following contracts/tools-api.md in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
-- [ ] T048 [US4] Implement delete_data_source() to remove Bedrock data source for catalog in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
-- [ ] T049 [US4] Implement delete_all_catalog_documents() to batch delete all documents for catalog from S3 and DynamoDB in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
-- [ ] T050 [US4] Implement delete_catalog_record() to remove catalog from DynamoDB in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
-- [ ] T051 [US4] Implement delete_catalog tool with confirm parameter following contracts/tools-api.md in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
-- [ ] T052 [US4] Add error handling for catalog not found case in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
+- [X] T046 [US4] Implement list_user_catalogs() to query DynamoDB for catalogs with CATALOG# prefix in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
+- [X] T047 [US4] Implement list_catalogs tool following contracts/tools-api.md in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
+- [X] T048 [US4] Implement delete_data_source() to remove Bedrock data source for catalog in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
+- [X] T049 [US4] Implement delete_all_catalog_documents() to batch delete all documents for catalog from S3 and DynamoDB in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
+- [X] T050 [US4] Implement delete_catalog_record() to remove catalog from DynamoDB in chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
+- [X] T051 [US4] Implement delete_catalog tool with confirm parameter following contracts/tools-api.md in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
+- [X] T052 [US4] Add error handling for catalog not found case in chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
 
 **Checkpoint**: User Story 4 complete - users can browse catalogs and delete entire catalogs
 
@@ -152,9 +152,9 @@
 
 **Purpose**: Enable KB tools in the frontend UI
 
-- [ ] T053 Add knowledge_base_tools group with all 9 tools to chatbot-app/frontend/src/config/tools-config.json
-- [ ] T054 Add systemPromptGuidance for KB best practices in chatbot-app/frontend/src/config/tools-config.json
-- [ ] T055 Configure displayName states (running/complete) for each tool in chatbot-app/frontend/src/config/tools-config.json
+- [X] T053 Add knowledge_base_tools group with all 9 tools to chatbot-app/frontend/src/config/tools-config.json
+- [X] T054 Add systemPromptGuidance for KB best practices in chatbot-app/frontend/src/config/tools-config.json
+- [X] T055 Configure displayName states (running/complete) for each tool in chatbot-app/frontend/src/config/tools-config.json
 
 **Checkpoint**: Frontend configured - tools visible in UI dropdown
 
@@ -170,7 +170,7 @@
 - [ ] T059 Verify query_catalog returns results with proper source citations
 - [ ] T060 Verify delete_catalog removes data source, S3 objects, and DynamoDB records
 - [ ] T061 Verify multi-tenant isolation (user A cannot see user B's catalogs)
-- [ ] T062 Update __all__ exports in chatbot-app/agentcore/src/builtin_tools/__init__.py if any tools missing
+- [X] T062 Update __all__ exports in chatbot-app/agentcore/src/builtin_tools/__init__.py if any tools missing
 
 ---
 

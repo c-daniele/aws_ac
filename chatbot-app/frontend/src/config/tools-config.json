@@ -212,6 +212,79 @@
           "displayName": { "running": "Updating notes", "complete": "Updated notes" }
         }
       ]
+    },
+    {
+      "id": "knowledge_base_tools",
+      "name": "Knowledge Base",
+      "description": "Create, manage, and query personal document catalogs with RAG capabilities (10 tools)",
+      "category": "knowledge",
+      "icon": "📚",
+      "enabled": true,
+      "isDynamic": true,
+      "systemPromptGuidance": "Knowledge Base Best Practices:\n\n**Creating Catalogs:**\n- Use descriptive names for organization (e.g., 'Project Research', 'Meeting Notes')\n- Catalog names: letters, numbers, spaces, hyphens only\n\n**Uploading Documents:**\n- IMPORTANT: The upload_to_catalog tool retrieves file content from uploaded files automatically\n- Only pass the filename parameter - do NOT pass file content as a parameter\n- Supported formats: PDF, DOCX, TXT, MD, CSV (max 50MB)\n- Each document gets indexed for RAG queries\n- Indexing takes a few minutes after upload\n\n**Querying Documents:**\n1. Select a catalog with select_catalog\n2. Ask natural language questions with query_catalog\n3. Responses include source citations with relevance scores\n\n**Workflow:**\n- Use list_catalogs to see available catalogs\n- Use get_indexing_status to check document processing\n- Use list_catalog_documents to see contents\n\n**Citations:**\n- Query results include filename and relevance score\n- Reference sources when providing answers",
+      "tags": ["knowledge", "documents", "research", "rag", "search"],
+      "tools": [
+        {
+          "id": "create_catalog",
+          "name": "Create Catalog",
+          "description": "Create a new document catalog for RAG queries",
+          "displayName": { "running": "Creating catalog", "complete": "Catalog created" }
+        },
+        {
+          "id": "list_catalogs",
+          "name": "List Catalogs",
+          "description": "List all knowledge base catalogs",
+          "displayName": { "running": "Listing catalogs", "complete": "Listed catalogs" }
+        },
+        {
+          "id": "upload_to_catalog",
+          "name": "Upload Document",
+          "description": "Upload an attached document to a catalog for indexing. File content is retrieved automatically from uploaded files - only specify the filename.",
+          "displayName": { "running": "Uploading document", "complete": "Document uploaded" }
+        },
+        {
+          "id": "list_catalog_documents",
+          "name": "List Documents",
+          "description": "List all documents in a catalog",
+          "displayName": { "running": "Listing documents", "complete": "Listed documents" }
+        },
+        {
+          "id": "select_catalog",
+          "name": "Select Catalog",
+          "description": "Set the active catalog for RAG queries",
+          "displayName": { "running": "Selecting catalog", "complete": "Catalog selected" }
+        },
+        {
+          "id": "query_catalog",
+          "name": "Query Catalog",
+          "description": "Query documents using RAG with citations",
+          "displayName": { "running": "Querying knowledge base", "complete": "Query complete" }
+        },
+        {
+          "id": "get_indexing_status",
+          "name": "Check Indexing",
+          "description": "Check document indexing progress",
+          "displayName": { "running": "Checking status", "complete": "Status retrieved" }
+        },
+        {
+          "id": "delete_catalog_document",
+          "name": "Delete Document",
+          "description": "Delete a document from a catalog",
+          "displayName": { "running": "Deleting document", "complete": "Document deleted" }
+        },
+        {
+          "id": "download_from_catalog",
+          "name": "Download Document",
+          "description": "Get download link for a document",
+          "displayName": { "running": "Generating download link", "complete": "Download ready" }
+        },
+        {
+          "id": "delete_catalog",
+          "name": "Delete Catalog",
+          "description": "Delete an entire catalog and all documents",
+          "displayName": { "running": "Deleting catalog", "complete": "Catalog deleted" }
+        }
+      ]
     }
   ],
   "browser_automation": [

@@ -11,6 +11,7 @@ import os
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Optional, Dict, List
 
 from strands.hooks import MessageAddedEvent
@@ -221,6 +222,12 @@ class CompactingSessionManager(AgentCoreMemorySessionManager):
             logger.debug(f"[Save] Skipping message with empty content (likely from stop signal)")
             return
 
+        # Convert Decimal values to native Python types (DynamoDB returns Decimal for numbers)
+        filtered_message = self._convert_decimals(filtered_message)
+
+        # Strip binary content (images, documents, large tool inputs) to prevent 413 errors
+        filtered_message = self._strip_excluded_tool_inputs(filtered_message)
+
         start = time.time()
         super().append_message(filtered_message, agent)
         elapsed_ms = (time.time() - start) * 1000
@@ -235,6 +242,9 @@ class CompactingSessionManager(AgentCoreMemorySessionManager):
         self._api_call_count += 1
         self._api_call_total_ms += elapsed_ms
 
+    # Fields to exclude from tool inputs when saving to memory (e.g., large binary content)
+    EXCLUDED_TOOL_INPUT_FIELDS = {"file_content"}
+
     def save_message_with_state(self, message: Dict, agent: "Agent") -> None:
         """Save message and agent state in a single API call using unified actorId."""
         # Filter out empty content blocks before saving (stop signal can leave incomplete messages)
@@ -245,6 +255,17 @@ class CompactingSessionManager(AgentCoreMemorySessionManager):
         if not content or (isinstance(content, list) and len(content) == 0):
             logger.debug(f"[Save] Skipping message with empty content (likely from stop signal)")
             return
+
+        # Convert Decimal values to native Python types (DynamoDB returns Decimal for numbers)
+        filtered_message = self._convert_decimals(filtered_message)
+
+        # Strip excluded fields from tool inputs (e.g., large file content)
+        filtered_message = self._strip_excluded_tool_inputs(filtered_message)
+
+        # CRITICAL: Also strip large content from the LIVE conversation (agent.messages)
+        # This prevents context window overflow on subsequent LLM calls
+        # The stripping above only affects memory storage, not the live conversation
+        self._strip_large_content_from_live_conversation(agent)
 
         session_message = SessionMessage.from_message(filtered_message, 0)
         message_payloads = AgentCoreMemoryConverter.message_to_payload(session_message)
@@ -365,6 +386,137 @@ class CompactingSessionManager(AgentCoreMemorySessionManager):
         return messages[offset:]
 
     @staticmethod
+    def _convert_decimals(obj: Any) -> Any:
+        """Recursively convert Decimal values to int or float.
+
+        DynamoDB returns numbers as Decimal, which are not JSON serializable.
+        This converts them to native Python types.
+        """
+        if isinstance(obj, Decimal):
+            # Convert to int if it's a whole number, otherwise float
+            if obj % 1 == 0:
+                return int(obj)
+            return float(obj)
+        elif isinstance(obj, dict):
+            return {k: CompactingSessionManager._convert_decimals(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [CompactingSessionManager._convert_decimals(item) for item in obj]
+        return obj
+
+    def _strip_excluded_tool_inputs(self, message: dict) -> dict:
+        """Strip binary content and excluded fields before saving to memory.
+
+        This prevents large binary content from being saved to memory, which would
+        cause 413 Payload Too Large errors. Handles:
+        1. toolUse inputs with excluded fields (e.g., file_content)
+        2. image blocks with binary source.bytes
+        3. document blocks with binary source.bytes
+
+        Args:
+            message: Message dict potentially containing binary content
+
+        Returns:
+            Modified message with binary content replaced by placeholders
+        """
+        if "content" not in message:
+            return message
+
+        content = message.get("content", [])
+        if not isinstance(content, list):
+            return message
+
+        modified = False
+        new_content = []
+
+        for block in content:
+            if not isinstance(block, dict):
+                new_content.append(block)
+                continue
+
+            # Handle toolUse blocks with excluded fields
+            if "toolUse" in block:
+                tool_use = block["toolUse"]
+                tool_input = tool_use.get("input", {})
+
+                if isinstance(tool_input, dict):
+                    # Check if any excluded fields are present
+                    excluded_present = self.EXCLUDED_TOOL_INPUT_FIELDS & set(tool_input.keys())
+
+                    if excluded_present:
+                        # Create a copy without excluded fields
+                        filtered_input = {
+                            k: v for k, v in tool_input.items()
+                            if k not in self.EXCLUDED_TOOL_INPUT_FIELDS
+                        }
+                        # Add placeholder to indicate content was stripped
+                        filtered_input["_stripped_fields"] = list(excluded_present)
+
+                        new_block = copy.deepcopy(block)
+                        new_block["toolUse"]["input"] = filtered_input
+                        new_content.append(new_block)
+                        modified = True
+
+                        logger.debug(
+                            f"[Save] Stripped excluded fields from toolUse: {excluded_present}"
+                        )
+                        continue
+
+            # Handle image blocks with binary bytes
+            elif "image" in block:
+                image_data = block["image"]
+                source = image_data.get("source", {})
+                if "bytes" in source:
+                    # Calculate original size for placeholder
+                    original_bytes = source.get("bytes", b"")
+                    if isinstance(original_bytes, bytes):
+                        original_size = len(original_bytes)
+                    elif isinstance(original_bytes, str):
+                        # Base64 encoded string
+                        original_size = len(original_bytes)
+                    else:
+                        original_size = 0
+
+                    # Replace with placeholder
+                    new_block = {
+                        "text": f"[Image: format={image_data.get('format', 'unknown')}, size={original_size} bytes - content stripped for memory storage]"
+                    }
+                    new_content.append(new_block)
+                    modified = True
+                    logger.debug(f"[Save] Replaced image block with placeholder (size={original_size})")
+                    continue
+
+            # Handle document blocks with binary bytes
+            elif "document" in block:
+                doc_data = block["document"]
+                source = doc_data.get("source", {})
+                if "bytes" in source:
+                    # Calculate original size for placeholder
+                    original_bytes = source.get("bytes", b"")
+                    if isinstance(original_bytes, bytes):
+                        original_size = len(original_bytes)
+                    elif isinstance(original_bytes, str):
+                        original_size = len(original_bytes)
+                    else:
+                        original_size = 0
+
+                    # Replace with placeholder
+                    doc_name = doc_data.get("name", "unknown")
+                    doc_format = doc_data.get("format", "unknown")
+                    new_block = {
+                        "text": f"[Document: {doc_name}.{doc_format}, size={original_size} bytes - content stripped for memory storage]"
+                    }
+                    new_content.append(new_block)
+                    modified = True
+                    logger.debug(f"[Save] Replaced document block with placeholder (name={doc_name}, size={original_size})")
+                    continue
+
+            new_content.append(block)
+
+        if modified:
+            return {**message, "content": new_content}
+        return message
+
+    @staticmethod
     def _filter_empty_text(message: dict) -> dict:
         """Filter out empty or invalid content blocks from message.
 
@@ -391,6 +543,78 @@ class CompactingSessionManager(AgentCoreMemorySessionManager):
 
         filtered = [block for block in content if is_valid_block(block)]
         return {**message, "content": filtered}
+
+    def _strip_large_content_from_live_conversation(self, agent: "Agent") -> None:
+        """Strip large excluded content from the live conversation (agent.messages).
+
+        This is CRITICAL for preventing context window overflow. When a tool like
+        `upload_to_catalog` receives a large file_content parameter (up to 50MB base64),
+        that content remains in agent.messages even after the tool executes.
+
+        On the next LLM call, this causes:
+        1. "Input is too long for requested model" error from Bedrock
+        2. Strands SDK's reduce_context() fails because it can only remove complete messages
+        3. "Unable to trim conversation context!" after 4 retry attempts
+
+        This method modifies agent.messages in-place to strip excluded fields
+        (like file_content) from toolUse inputs, replacing them with placeholders.
+
+        Args:
+            agent: The Agent whose messages to process
+        """
+        if not hasattr(agent, 'messages') or not agent.messages:
+            return
+
+        modified_count = 0
+
+        for msg_idx, msg in enumerate(agent.messages):
+            if msg.get('role') != 'assistant':
+                continue
+
+            content = msg.get('content', [])
+            if not isinstance(content, list):
+                continue
+
+            for block_idx, block in enumerate(content):
+                if not isinstance(block, dict) or 'toolUse' not in block:
+                    continue
+
+                tool_use = block['toolUse']
+                tool_input = tool_use.get('input', {})
+
+                if not isinstance(tool_input, dict):
+                    continue
+
+                # Check if any excluded fields are present
+                excluded_present = self.EXCLUDED_TOOL_INPUT_FIELDS & set(tool_input.keys())
+
+                if excluded_present:
+                    # Modify in-place: remove excluded fields and add placeholder
+                    for field in excluded_present:
+                        if field in tool_input:
+                            # Calculate size for placeholder
+                            field_value = tool_input[field]
+                            if isinstance(field_value, str):
+                                field_size = len(field_value)
+                            elif isinstance(field_value, bytes):
+                                field_size = len(field_value)
+                            else:
+                                field_size = 0
+
+                            # Remove the large field
+                            del tool_input[field]
+
+                            # Add placeholder indicating content was stripped
+                            tool_input[f"_{field}_stripped"] = f"[Content stripped: {field_size} bytes]"
+
+                            modified_count += 1
+                            logger.debug(
+                                f"[Live Context] Stripped {field} ({field_size} bytes) from "
+                                f"toolUse in message[{msg_idx}].content[{block_idx}]"
+                            )
+
+        if modified_count > 0:
+            logger.info(f"[Live Context] Stripped {modified_count} large field(s) from live conversation to prevent context overflow")
 
     def _parse_message_from_payload(self, payload_item: dict) -> Optional[SessionMessage]:
         """Parse a message from a payload item."""
