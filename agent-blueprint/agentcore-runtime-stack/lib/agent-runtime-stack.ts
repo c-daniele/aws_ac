@@ -17,6 +17,7 @@ import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment'
 import * as codebuild from 'aws-cdk-lib/aws-codebuild'
 import * as cr from 'aws-cdk-lib/custom-resources'
 import * as lambda from 'aws-cdk-lib/aws-lambda'
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb'
 import { Construct } from 'constructs'
 
 export interface AgentRuntimeStackProps extends cdk.StackProps {
@@ -633,6 +634,61 @@ export class AgentRuntimeStack extends cdk.Stack {
     })
 
     // ============================================================
+    // KB Catalog DynamoDB Table (Data Model Refactor)
+    // Dedicated table for catalog and document metadata
+    // ============================================================
+
+    // T001-T003: Create DynamoDB table for KB Catalogs with new key schema
+    // PK: catalog_id, SK: METADATA (for catalog) or DOC#{document_id} (for documents)
+    const kbCatalogTable = new dynamodb.Table(this, 'KBCatalogTable', {
+      tableName: `${projectName}-kb-catalog`,
+      partitionKey: { name: 'catalog_id', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY, // Change to RETAIN for production
+      pointInTimeRecoverySpecification: {
+        pointInTimeRecoveryEnabled: true,
+      },
+    })
+
+    // T002: Add GSI for user_id lookups (list all catalogs for a user)
+    kbCatalogTable.addGlobalSecondaryIndex({
+      indexName: 'user_id-index',
+      partitionKey: { name: 'user_id', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.KEYS_ONLY,
+    })
+
+    // T004: Grant execution role permissions for KB Catalog table
+    executionRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'KBCatalogTableAccess',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'dynamodb:GetItem',
+          'dynamodb:PutItem',
+          'dynamodb:UpdateItem',
+          'dynamodb:DeleteItem',
+          'dynamodb:Query',
+          'dynamodb:BatchGetItem',
+          'dynamodb:BatchWriteItem',
+          'dynamodb:DescribeTable',
+        ],
+        resources: [
+          kbCatalogTable.tableArn,
+          `${kbCatalogTable.tableArn}/index/*`,
+        ],
+      })
+    )
+
+    // Store KB Catalog table name in Parameter Store
+    new ssm.StringParameter(this, 'KBCatalogTableParameter', {
+      parameterName: `/${projectName}/${environment}/agentcore/kb-catalog-table`,
+      stringValue: kbCatalogTable.tableName,
+      description: 'DynamoDB table for KB Catalog metadata',
+      tier: ssm.ParameterTier.STANDARD,
+    })
+
+    // ============================================================
     // Step 2: CodeBuild Project for Building Container
     // ============================================================
     const codeBuildRole = new iam.Role(this, 'CodeBuildRole', {
@@ -1180,6 +1236,8 @@ async function sendResponse(event, status, data, reason) {
         // T007: Knowledge Base environment variables
         KB_ID: knowledgeBase.getAtt('KnowledgeBaseId').toString(),
         KB_DOCS_BUCKET: kbDocsBucket.bucketName,
+        // T005: KB Catalog table environment variable
+        KB_CATALOG_TABLE: kbCatalogTable.tableName,
         // OpenTelemetry observability configuration
         AGENT_OBSERVABILITY_ENABLED: 'true',
         OTEL_PYTHON_DISTRO: 'aws_distro',
@@ -1312,6 +1370,19 @@ async function sendResponse(event, status, data, reason) {
       value: kbVectorBucketName,
       description: 'S3 Vector Bucket for Knowledge Base embeddings',
       exportName: `${projectName}-kb-vector-bucket`,
+    })
+
+    // KB Catalog Table Output
+    new cdk.CfnOutput(this, 'KBCatalogTableName', {
+      value: kbCatalogTable.tableName,
+      description: 'DynamoDB table for KB Catalog metadata',
+      exportName: `${projectName}-kb-catalog-table`,
+    })
+
+    new cdk.CfnOutput(this, 'KBCatalogTableArn', {
+      value: kbCatalogTable.tableArn,
+      description: 'DynamoDB table ARN for KB Catalog metadata',
+      exportName: `${projectName}-kb-catalog-table-arn`,
     })
   }
 }

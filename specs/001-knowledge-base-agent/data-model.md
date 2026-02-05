@@ -2,23 +2,26 @@
 
 **Feature**: 001-knowledge-base-agent
 **Date**: 2026-02-03
+**Last Updated**: 2026-02-05 (Data Model Refactor)
 
 ## Entity Relationship Diagram
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                              USER                                    │
-│  (from Cognito - user_id is the partition key)                      │
+│  (from Cognito - user_id used for tenant isolation)                 │
 └─────────────────────────────────────────────────────────────────────┘
                                     │
                                     │ 1:N (one user owns many catalogs)
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                            CATALOG                                   │
-│  PK: user_id                                                        │
-│  SK: CATALOG#{catalog_id}                                           │
+│  Table: {project}-kb-catalog                                        │
+│  PK: catalog_id                                                     │
+│  SK: METADATA                                                       │
 │  ─────────────────────────────────────────────────────────────────  │
 │  catalog_id: STRING (UUID)                                          │
+│  user_id: STRING (GSI partition key)                                │
 │  catalog_name: STRING                                               │
 │  description: STRING (optional)                                     │
 │  data_source_id: STRING (Bedrock KB data source ID)                 │
@@ -35,11 +38,13 @@
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                           DOCUMENT                                   │
-│  PK: user_id                                                        │
-│  SK: DOCUMENT#{catalog_id}#{document_id}                            │
+│  Table: {project}-kb-catalog (same table as Catalog)                │
+│  PK: catalog_id                                                     │
+│  SK: DOC#{document_id}                                              │
 │  ─────────────────────────────────────────────────────────────────  │
 │  document_id: STRING (UUID)                                         │
-│  catalog_id: STRING (FK to Catalog)                                 │
+│  catalog_id: STRING (same as PK)                                    │
+│  user_id: STRING (denormalized for GSI)                             │
 │  filename: STRING                                                   │
 │  file_type: STRING (pdf, docx, txt, md, csv)                       │
 │  file_size_bytes: NUMBER                                            │
@@ -67,6 +72,32 @@
 
 ---
 
+## DynamoDB Table Design
+
+### Table: `{project}-kb-catalog`
+
+**Why a dedicated table?** (Decision 2026-02-05)
+- Clean separation from user/session data in `users-v2`
+- Independent scaling and capacity management
+- Clearer access patterns optimized for catalog operations
+- Catalog + documents in same partition for efficient queries
+
+**Key Schema**:
+| Key | Type | Description |
+|-----|------|-------------|
+| `catalog_id` | String | Partition key - catalog identifier |
+| `sk` | String | Sort key - `METADATA` or `DOC#{document_id}` |
+
+**GSI: `user_id-index`**:
+| Key | Type | Description |
+|-----|------|-------------|
+| `user_id` | String | Partition key - Cognito user ID |
+| Projection | KEYS_ONLY | Returns catalog_id + sk only |
+
+**Billing Mode**: On-demand (PAY_PER_REQUEST)
+
+---
+
 ## Entity Definitions
 
 ### 1. Catalog
@@ -75,9 +106,9 @@ A named container for related documents belonging to a user. Catalogs are isolat
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| user_id | STRING | Yes | Cognito user identifier (partition key) |
-| sk | STRING | Yes | Sort key: `CATALOG#{catalog_id}` |
-| catalog_id | STRING | Yes | UUID, auto-generated on creation |
+| catalog_id | STRING | Yes | UUID, auto-generated (partition key) |
+| sk | STRING | Yes | Sort key: `METADATA` |
+| user_id | STRING | Yes | Cognito user identifier (GSI key) |
 | catalog_name | STRING | Yes | User-provided name (1-100 chars) |
 | description | STRING | No | Optional description (max 500 chars) |
 | data_source_id | STRING | Yes | Bedrock KB data source ID for this catalog |
@@ -115,10 +146,10 @@ A file uploaded to a catalog.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| user_id | STRING | Yes | Cognito user identifier (partition key) |
-| sk | STRING | Yes | Sort key: `DOCUMENT#{catalog_id}#{document_id}` |
+| catalog_id | STRING | Yes | Parent catalog (partition key) |
+| sk | STRING | Yes | Sort key: `DOC#{document_id}` |
 | document_id | STRING | Yes | UUID, auto-generated on upload |
-| catalog_id | STRING | Yes | Parent catalog reference |
+| user_id | STRING | Yes | Cognito user ID (denormalized) |
 | filename | STRING | Yes | Original filename |
 | file_type | STRING | Yes | Extension (pdf, docx, txt, md, csv) |
 | file_size_bytes | NUMBER | Yes | File size in bytes |
@@ -185,44 +216,67 @@ Tracks which catalog is selected for RAG queries in the current session.
 
 ## DynamoDB Access Patterns
 
-### Primary Table: `{project}-users-v2`
+### Table: `{project}-kb-catalog`
 
-| Access Pattern | Key Condition | Use Case |
-|----------------|---------------|----------|
-| Get catalog by ID | `PK=user_id, SK=CATALOG#{catalog_id}` | Load catalog details |
-| List user's catalogs | `PK=user_id, SK begins_with CATALOG#` | Catalog listing |
-| Get document by ID | `PK=user_id, SK=DOCUMENT#{catalog_id}#{doc_id}` | Load document |
-| List catalog documents | `PK=user_id, SK begins_with DOCUMENT#{catalog_id}#` | Document listing |
-| Delete catalog + docs | `PK=user_id, SK begins_with CATALOG#{id}` + batch delete docs | Cascade delete |
+| Access Pattern | Operation | Key Condition | Notes |
+|----------------|-----------|---------------|-------|
+| Get catalog metadata | GetItem | `PK=catalog_id, SK=METADATA` | Direct lookup |
+| List documents in catalog | Query | `PK=catalog_id, SK begins_with DOC#` | Single partition |
+| List user's catalogs | Query (GSI) | `user_id-index: user_id=X` | Returns KEYS_ONLY |
+| Get document by ID | GetItem | `PK=catalog_id, SK=DOC#{doc_id}` | Direct lookup |
+| Delete catalog + docs | Query + BatchDelete | `PK=catalog_id` | All items in partition |
 
 ### Query Examples
 
 ```python
-# List all catalogs for a user
-response = table.query(
-    KeyConditionExpression='userId = :uid AND begins_with(sk, :prefix)',
-    ExpressionAttributeValues={
-        ':uid': user_id,
-        ':prefix': 'CATALOG#'
+# Table reference
+table_name = f"{project_name}-kb-catalog"
+table = dynamodb.Table(table_name)
+
+# Get catalog metadata
+response = table.get_item(
+    Key={
+        'catalog_id': catalog_id,
+        'sk': 'METADATA'
     }
 )
 
 # List documents in a catalog
 response = table.query(
-    KeyConditionExpression='userId = :uid AND begins_with(sk, :prefix)',
+    KeyConditionExpression='catalog_id = :cid AND begins_with(sk, :prefix)',
     ExpressionAttributeValues={
-        ':uid': user_id,
-        ':prefix': f'DOCUMENT#{catalog_id}#'
+        ':cid': catalog_id,
+        ':prefix': 'DOC#'
     }
 )
 
-# Get specific catalog
-response = table.get_item(
-    Key={
-        'userId': user_id,
-        'sk': f'CATALOG#{catalog_id}'
+# List user's catalogs (via GSI)
+response = table.query(
+    IndexName='user_id-index',
+    KeyConditionExpression='user_id = :uid',
+    ExpressionAttributeValues={
+        ':uid': user_id
     }
 )
+# Note: Returns only catalog_id + sk; fetch full details with GetItem if needed
+
+# Get specific document
+response = table.get_item(
+    Key={
+        'catalog_id': catalog_id,
+        'sk': f'DOC#{document_id}'
+    }
+)
+
+# Delete all items in a catalog (documents + metadata)
+# First query all items, then batch delete
+response = table.query(
+    KeyConditionExpression='catalog_id = :cid',
+    ExpressionAttributeValues={':cid': catalog_id}
+)
+with table.batch_writer() as batch:
+    for item in response['Items']:
+        batch.delete_item(Key={'catalog_id': item['catalog_id'], 'sk': item['sk']})
 ```
 
 ---
@@ -243,11 +297,12 @@ s3://{project}-kb-docs-{account}-{region}/
 
 ```json
 {
-  "user_id": "cognito-sub-xxx",
-  "catalog_id": "cat-abc123",
-  "document_id": "doc-def456",
-  "filename": "report.pdf",
-  "uploaded_at": "2026-02-03T10:30:00Z"
+  "metadataAttributes": {
+    "user_id": {"value": {"type": "STRING", "stringValue": "cognito-sub-xxx"}},
+    "catalog_id": {"value": {"type": "STRING", "stringValue": "cat-abc123"}},
+    "document_id": {"value": {"type": "STRING", "stringValue": "doc-def456"}},
+    "filename": {"value": {"type": "STRING", "stringValue": "report.pdf"}}
+  }
 }
 ```
 
@@ -255,8 +310,8 @@ s3://{project}-kb-docs-{account}-{region}/
 
 ## Indexing Status Values
 
-| Status | DynamoDB | Description |
-|--------|----------|-------------|
+| Status | Entity | Description |
+|--------|--------|-------------|
 | `uploading` | Document only | File being uploaded to S3 |
 | `pending` | Both | Waiting for ingestion job |
 | `indexing` | Both | Bedrock ingestion in progress |

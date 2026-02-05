@@ -2,6 +2,7 @@
 
 **Feature**: 001-knowledge-base-agent
 **Date**: 2026-02-03
+**Last Updated**: 2026-02-05 (Data Model Refactor)
 
 ## Prerequisites
 
@@ -22,13 +23,16 @@ cd agent-blueprint
 # Update .env with new KB configuration (if needed)
 echo "BEDROCK_KB_EMBEDDING_MODEL=amazon.titan-embed-text-v2:0" >> .env
 
-# Deploy runtime stack with KB resources
+# Deploy runtime stack with KB resources (includes new kb-catalog table)
 ./deploy.sh --runtime
 ```
 
 ### Verify Resources Created
 
 ```bash
+# Check new DynamoDB table
+aws dynamodb describe-table --table-name strands-agent-chatbot-kb-catalog
+
 # Check S3 bucket
 aws s3 ls | grep kb-docs
 
@@ -38,86 +42,57 @@ aws cloudformation describe-stacks \
   --query 'Stacks[0].Outputs'
 ```
 
+**New resources created:**
+- DynamoDB table: `{project}-kb-catalog` with GSI `user_id-index`
+- S3 bucket: `{project}-kb-docs-{account}-{region}`
+- S3 Vector Bucket: `{project}-kb-vectors`
+- Bedrock Knowledge Base: Shared KB with S3 Vector storage
+
 ---
 
 ## Step 2: Backend Tool Implementation
 
-### Create Tool File
+### Existing Implementation
 
-```bash
-# Create new tool file
-touch chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
+The `KBCatalogManager` class is already implemented in:
+```
+chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
 ```
 
-### Implement Basic Tool
+### Update for New Table Schema
+
+The key change is updating the table name and key patterns:
 
 ```python
-# chatbot-app/agentcore/src/builtin_tools/knowledge_base_tools.py
+# chatbot-app/agentcore/src/workspace/kb_catalog_manager.py
 
-import logging
-import boto3
-from typing import Dict, Any, Optional
-from strands import tool, ToolContext
+# OLD (users-v2 style):
+# self.table_name = f"{self.project_name}-users-v2"
+# Key={"userId": self.user_id, "sk": f"CATALOG#{catalog_id}"}
 
-logger = logging.getLogger(__name__)
+# NEW (dedicated table):
+self.table_name = f"{self.project_name}-kb-catalog"
 
-def _get_user_session_ids(tool_context: ToolContext) -> tuple[str, str]:
-    """Extract user_id and session_id from ToolContext"""
-    invocation_state = tool_context.invocation_state
-    return (
-        invocation_state.get('user_id', 'default_user'),
-        invocation_state.get('session_id', 'default_session')
-    )
+# Get catalog
+response = self.table.get_item(
+    Key={"catalog_id": catalog_id, "sk": "METADATA"}
+)
 
-@tool(context=True)
-def list_catalogs(tool_context: ToolContext = None) -> Dict[str, Any]:
-    """List all knowledge base catalogs for the current user.
+# List documents in catalog
+response = self.table.query(
+    KeyConditionExpression='catalog_id = :cid AND begins_with(sk, :prefix)',
+    ExpressionAttributeValues={
+        ':cid': catalog_id,
+        ':prefix': 'DOC#'
+    }
+)
 
-    Returns:
-        List of catalogs with metadata
-    """
-    try:
-        user_id, _ = _get_user_session_ids(tool_context)
-
-        # Query DynamoDB for user's catalogs
-        dynamodb = boto3.resource('dynamodb')
-        table = dynamodb.Table(f"{os.environ['PROJECT_NAME']}-users-v2")
-
-        response = table.query(
-            KeyConditionExpression='userId = :uid AND begins_with(sk, :prefix)',
-            ExpressionAttributeValues={
-                ':uid': user_id,
-                ':prefix': 'CATALOG#'
-            }
-        )
-
-        catalogs = response.get('Items', [])
-
-        if not catalogs:
-            return {
-                "content": [{"text": "No catalogs found. Create one with create_catalog."}],
-                "status": "success",
-                "metadata": {"catalog_count": 0}
-            }
-
-        # Format response
-        lines = [f"Found {len(catalogs)} catalog(s):\n"]
-        for cat in catalogs:
-            lines.append(f"- **{cat['catalog_name']}** ({cat['catalog_id']})")
-            lines.append(f"  {cat.get('document_count', 0)} documents, Status: {cat.get('indexing_status', 'unknown')}")
-
-        return {
-            "content": [{"text": "\n".join(lines)}],
-            "status": "success",
-            "metadata": {"catalog_count": len(catalogs), "catalogs": catalogs}
-        }
-
-    except Exception as e:
-        logger.error(f"list_catalogs failed: {e}")
-        return {
-            "content": [{"text": f"Error listing catalogs: {str(e)}"}],
-            "status": "error"
-        }
+# List user's catalogs (via GSI)
+response = self.table.query(
+    IndexName='user_id-index',
+    KeyConditionExpression='user_id = :uid',
+    ExpressionAttributeValues={':uid': self.user_id}
+)
 ```
 
 ### Register Tool
@@ -156,7 +131,7 @@ __all__ = [
   "name": "Knowledge Base",
   "description": "Create and query personal document catalogs",
   "category": "knowledge",
-  "icon": "📚",
+  "icon": "library_books",
   "enabled": true,
   "isDynamic": true,
   "tools": [
@@ -250,9 +225,10 @@ Agent: Based on your documents...
 
 ### DynamoDB Access Denied
 
-1. Check IAM role has `dynamodb:Query` permission
-2. Verify table name matches `PROJECT_NAME-users-v2`
-3. Check CloudWatch logs for detailed error
+1. Check IAM role has `dynamodb:Query`, `dynamodb:GetItem` permissions
+2. Verify table name matches `{PROJECT_NAME}-kb-catalog`
+3. Verify GSI permissions for `user_id-index`
+4. Check CloudWatch logs for detailed error
 
 ### Bedrock KB Query Fails
 
@@ -260,6 +236,37 @@ Agent: Based on your documents...
 2. Check ingestion job completed successfully
 3. Ensure metadata filters match exactly
 4. Check Bedrock service quotas
+
+---
+
+## Data Model Quick Reference
+
+### Table: `{project}-kb-catalog`
+
+| Key | Value | Description |
+|-----|-------|-------------|
+| `catalog_id` | `cat-xxxxx` | Partition key |
+| `sk` | `METADATA` | Catalog metadata record |
+| `sk` | `DOC#{doc_id}` | Document record |
+
+### GSI: `user_id-index`
+
+- Partition key: `user_id`
+- Projection: KEYS_ONLY
+- Use for: Listing all catalogs owned by a user
+
+### Access Patterns
+
+```python
+# Get catalog
+table.get_item(Key={"catalog_id": cid, "sk": "METADATA"})
+
+# List documents
+table.query(PK=catalog_id, SK begins_with "DOC#")
+
+# List user's catalogs
+table.query(IndexName="user_id-index", PK=user_id)
+```
 
 ---
 

@@ -89,8 +89,8 @@ A user with multiple knowledge bases needs to see all their catalogs, understand
 
 - What happens when a user uploads a duplicate file (same name) to a catalog? System should ask whether to replace or rename.
 - How does the system handle very large files (>50MB)? System should enforce size limits with clear error messages.
-- What happens if indexing fails mid-process? System should mark the document as "failed" with retry option.
-- How does the system behave when the vector database is temporarily unavailable? Graceful degradation with queued operations.
+- What happens if indexing fails mid-process? System marks the document as "failed" status. (Manual retry via re-upload; automated retry UI deferred to future iteration)
+- How does the system behave when the vector database is temporarily unavailable? System returns error message; user can retry later. (Operation queuing deferred to future iteration)
 - What happens when a user tries to query an empty catalog? Clear message indicating no documents are indexed.
 - What if a user tries to access another user's catalog? Access denied with appropriate error (user isolation enforced).
 
@@ -116,8 +116,8 @@ A user with multiple knowledge bases needs to see all their catalogs, understand
 
 **Document Indexing**
 - **FR-011**: System MUST automatically initiate indexing when documents are uploaded
-- **FR-012**: System MUST parse documents to extract text content
-- **FR-013**: System MUST generate embeddings using the configured embedding model (Amazon Titan)
+- **FR-012**: System MUST parse documents to extract text content (handled by Bedrock KB ingestion)
+- **FR-013**: System MUST generate embeddings using the configured embedding model (Amazon Titan, handled by Bedrock KB ingestion)
 - **FR-014**: System MUST store vectors in S3 Vector Bucket with document metadata (filename, user ID, catalog ID)
 - **FR-015**: System MUST provide real-time indexing status updates (uploading, parsing, embedding, indexed, failed)
 
@@ -139,6 +139,25 @@ A user with multiple knowledge bases needs to see all their catalogs, understand
 
 - **Document**: A file uploaded to a catalog. Key attributes: document_id, catalog_id, user_id, filename, file_type, file_size, s3_key, indexing_status, uploaded_at, indexed_at.
 
+### Data Storage
+
+**DynamoDB Table**: `{project}-kb-catalog` (dedicated table, separate from `users-v2`)
+- Stores all Catalog and Document records
+- Rationale: Clean separation from user/session data, independent scaling, clearer access patterns
+
+**Key Schema**:
+- PK: `catalog_id` (partition key)
+- SK: `METADATA` for catalog record, `DOC#{document_id}` for document records
+- GSI required: `user_id-index` (PK: `user_id`) for listing all catalogs by user
+- Billing mode: On-demand (PAY_PER_REQUEST)
+
+**Access Patterns**:
+- Get catalog metadata: `PK=catalog_id, SK=METADATA`
+- List documents in catalog: `PK=catalog_id, SK begins_with DOC#`
+- List user's catalogs: Query GSI `user_id-index` with `user_id`
+
+**Infrastructure**: Table defined in `agentcore-runtime-stack` CDK (alongside existing runtime resources)
+
 - **User**: The authenticated individual interacting with the system. Identified by user_id from authentication system. Owns zero or more catalogs.
 
 - **Vector Entry**: An embedded chunk of document content stored in the shared S3 Vector Bucket for retrieval. Contains: embedding vector, source document reference, chunk text, metadata (user_id, catalog_id, filename). Metadata filtering enforces tenant isolation.
@@ -157,6 +176,14 @@ A user with multiple knowledge bases needs to see all their catalogs, understand
 - **SC-008**: Indexing status updates are visible to users within 10 seconds of state changes
 
 ## Clarifications
+
+### Session 2026-02-05
+
+- Q: What DynamoDB table strategy for Catalog/Document data? → A: Dedicated table (`{project}-kb-catalog`) for all Catalog + Document records, separate from `users-v2`
+- Q: What primary key design for the dedicated table? → A: PK: `catalog_id`, SK: `METADATA` for catalog records / `DOC#{document_id}` for document records
+- Q: What migration strategy for existing data? → A: No migration needed - feature not yet in production
+- Q: What DynamoDB billing/provisioning mode? → A: On-demand (PAY_PER_REQUEST) - auto-scaling, no capacity planning
+- Q: Which CDK stack for the new table? → A: Add to `agentcore-runtime-stack` (alongside existing runtime resources)
 
 ### Session 2026-02-04
 
@@ -181,6 +208,7 @@ A user with multiple knowledge bases needs to see all their catalogs, understand
 - Multi-tenant isolation is enforced via metadata filtering (user_id, catalog_id) at query time
 - Catalog names do not need to be globally unique, only unique per user
 - Users will manage a reasonable number of catalogs (tens, not thousands)
+- **No data migration required** - Knowledge Base feature not yet in production; existing `users-v2` catalog data can be discarded
 
 ## Out of Scope
 
@@ -192,3 +220,5 @@ A user with multiple knowledge bases needs to see all their catalogs, understand
 - Advanced search operators (boolean, fuzzy matching)
 - Document preview within the chat interface
 - Batch catalog operations (bulk delete, bulk move)
+- Automated retry UI for failed document indexing (manual re-upload supported)
+- Operation queuing for transient infrastructure failures

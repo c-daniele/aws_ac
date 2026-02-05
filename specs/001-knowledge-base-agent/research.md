@@ -2,11 +2,14 @@
 
 **Feature**: 001-knowledge-base-agent
 **Date**: 2026-02-03
+**Last Updated**: 2026-02-05 (Data Model Refactor)
 **Status**: Complete
 
 ## Executive Summary
 
 This research consolidates findings on implementing a Knowledge Base Agent for the Strands Agent Chatbot. The feature enables users to create, manage, and query personal document catalogs using AWS Bedrock Knowledge Base with S3 Vector Bucket storage. A single shared Knowledge Base serves all users, with metadata filtering (user_id, catalog_id) for multi-tenant isolation.
+
+**UPDATE 2026-02-05**: The data model has been refactored to use a dedicated `{project}-kb-catalog` DynamoDB table instead of extending the `users-v2` table. This improves separation of concerns, enables independent scaling, and provides clearer access patterns.
 
 ---
 
@@ -39,37 +42,39 @@ This research consolidates findings on implementing a Knowledge Base Agent for t
 
 ---
 
-## Decision 2: Metadata Storage
+## Decision 2: Metadata Storage (UPDATED 2026-02-05)
 
-**Decision**: Extend existing `users-v2` DynamoDB table with composite sort keys for catalog metadata.
+**Decision**: Use a dedicated `{project}-kb-catalog` DynamoDB table with `catalog_id` as partition key.
 
 **Rationale**:
-- Reuses existing table pattern (`userId` + `sk` composite)
-- No new DynamoDB table needed
-- Consistent with tool registry pattern (`sk='TOOL_REGISTRY'`)
-- Sort key pattern: `CATALOG#{catalogId}` for catalogs, `DOCUMENT#{catalogId}#{documentId}` for documents
-- No per-catalog KB references needed (single shared KB)
+- Clean separation from user/session data in `users-v2` table
+- Independent scaling and capacity planning
+- Clearer access patterns optimized for catalog operations
+- Simpler IAM policies (separate resource ARN)
+- Most common access is "get catalog with its documents" (single partition query)
 
-**Schema**:
+**Key Schema**:
 ```
-PK: userId
-SK: CATALOG#{catalogId}
-Attributes:
-  - catalogName: STRING
-  - description: STRING
-  - createdAt: NUMBER (epoch)
-  - updatedAt: NUMBER (epoch)
-  - documentCount: NUMBER
-  - totalSizeBytes: NUMBER
-  - indexingStatus: STRING (pending|indexing|ready|error)
+Table: {project}-kb-catalog
+PK: catalog_id (String)
+SK: METADATA | DOC#{document_id}
+GSI: user_id-index (PK: user_id) for listing user's catalogs
+Billing: On-demand (PAY_PER_REQUEST)
 ```
+
+**Access Patterns**:
+| Pattern | Key Condition | Notes |
+|---------|---------------|-------|
+| Get catalog | `PK=catalog_id, SK=METADATA` | Direct lookup |
+| List catalog documents | `PK=catalog_id, SK begins_with DOC#` | Single partition query |
+| List user's catalogs | GSI: `user_id=X` | Returns catalog_ids, then GetItem for details |
 
 **Alternatives Considered**:
 | Alternative | Rejected Because |
 |-------------|------------------|
-| New dedicated DynamoDB table | Unnecessary, existing pattern works |
-| S3 metadata only | No efficient listing/querying |
-| PostgreSQL/Aurora | Not serverless-first, overkill |
+| Extend `users-v2` table | Table bloat, mixed access patterns, compromises readability |
+| `user_id` as PK | Creates hot partitions, doesn't optimize for catalog-centric access |
+| Two tables (catalogs + documents) | Over-engineering; documents always accessed via catalog |
 
 ---
 
@@ -237,9 +242,10 @@ uploading → pending → indexing → indexed
 
 ---
 
-## Decision 7: CDK Infrastructure Additions
+## Decision 7: CDK Infrastructure Additions (UPDATED 2026-02-05)
 
 **Decision**: Add new resources to `agentcore-runtime-stack`:
+- **NEW: DynamoDB table `{project}-kb-catalog`** with GSI for user queries
 - S3 bucket for KB source documents where users will upload files under `{userId}/{catalogId}/`
 - S3 Vector Bucket for embeddings (single shared bucket)
 - S3 Vector Index (single shared index)
@@ -249,7 +255,27 @@ uploading → pending → indexing → indexed
 - IAM permissions for application to query KB and trigger ingestion
 - Environment variables for KB configuration
 
-**New Resources** (based on reference CloudFormation template):
+**New DynamoDB Table** (added 2026-02-05):
+```typescript
+// DynamoDB table for KB Catalog metadata
+const kbCatalogTable = new dynamodb.Table(this, 'KBCatalogTable', {
+  tableName: `${projectName}-kb-catalog`,
+  partitionKey: { name: 'catalog_id', type: dynamodb.AttributeType.STRING },
+  sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
+  billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+  removalPolicy: cdk.RemovalPolicy.RETAIN,
+  pointInTimeRecovery: true,
+});
+
+// GSI for listing catalogs by user
+kbCatalogTable.addGlobalSecondaryIndex({
+  indexName: 'user_id-index',
+  partitionKey: { name: 'user_id', type: dynamodb.AttributeType.STRING },
+  projectionType: dynamodb.ProjectionType.KEYS_ONLY,
+});
+```
+
+**Other Resources** (based on reference CloudFormation template):
 ```typescript
 // S3 Vector Bucket for KB embeddings (single shared)
 const kbVectorBucket = new s3vectors.CfnVectorBucket(this, 'KBVectorBucket', {
@@ -288,8 +314,20 @@ const bedrockKBServiceRole = new iam.Role(this, 'BedrockKBServiceRole', {
   // Policies for S3, S3Vectors, and Bedrock model access
 });
 
-// Single shared Bedrock Knowledge Base (created at deployment)
-// KB_ID and DATA_SOURCE_ID passed to application as environment variables
+// IAM for DynamoDB access (NEW)
+executionRole.addToPolicy(new iam.PolicyStatement({
+  actions: [
+    'dynamodb:GetItem',
+    'dynamodb:PutItem',
+    'dynamodb:UpdateItem',
+    'dynamodb:DeleteItem',
+    'dynamodb:Query'
+  ],
+  resources: [
+    kbCatalogTable.tableArn,
+    `${kbCatalogTable.tableArn}/index/*`
+  ]
+}));
 
 // IAM for application to use shared KB and manage data sources per catalog
 executionRole.addToPolicy(new iam.PolicyStatement({
@@ -320,6 +358,7 @@ executionRole.addToPolicy(new iam.PolicyStatement({
 environment: {
   KB_ID: sharedKnowledgeBase.attrKnowledgeBaseId,
   DATA_SOURCE_ID: sharedDataSource.attrDataSourceId,
+  KB_CATALOG_TABLE: kbCatalogTable.tableName,  // NEW
   KB_DOCS_BUCKET: kbDocumentsBucket.bucketName
 }
 ```
@@ -337,7 +376,7 @@ environment: {
   "name": "Knowledge Base",
   "description": "Create and query personal document catalogs",
   "category": "knowledge",
-  "icon": "📚",
+  "icon": "library_books",
   "enabled": true,
   "isDynamic": true,
   "tools": [
@@ -349,6 +388,18 @@ environment: {
   ]
 }
 ```
+
+---
+
+## Decision 9: Migration Strategy (NEW 2026-02-05)
+
+**Decision**: No migration required.
+
+**Rationale**:
+- Knowledge Base feature is not yet in production
+- Existing test data in `users-v2` can be discarded
+- Clean slate approach simplifies implementation
+- New table starts fresh with correct schema
 
 ---
 

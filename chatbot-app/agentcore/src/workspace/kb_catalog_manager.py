@@ -7,10 +7,11 @@ This manager handles:
 - Bedrock Knowledge Base data source management (one per catalog)
 - Ingestion job triggering and status tracking
 
-DynamoDB Schema (extends users-v2 table):
-- PK: userId
-- SK: CATALOG#{catalog_id} for catalogs
-- SK: DOCUMENT#{catalog_id}#{document_id} for documents
+DynamoDB Schema (dedicated kb-catalog table):
+- Table: {project}-kb-catalog
+- PK: catalog_id
+- SK: METADATA (for catalog records) or DOC#{document_id} (for document records)
+- GSI: user_id-index (PK: user_id, projection: KEYS_ONLY) for listing user's catalogs
 
 S3 Structure:
 - s3://{bucket}/{user_id}/{catalog_id}/{document_id}-{filename}
@@ -71,7 +72,10 @@ class KBCatalogManager:
         self.region = os.getenv("AWS_REGION", "us-west-2")
         self.dynamodb = boto3.resource("dynamodb", region_name=self.region)
         self.project_name = os.getenv("PROJECT_NAME", "strands-agent-chatbot")
-        self.table_name = f"{self.project_name}-users-v2"
+        # T014/T015: Use dedicated kb-catalog table with env var fallback
+        self.table_name = os.getenv(
+            "KB_CATALOG_TABLE", f"{self.project_name}-kb-catalog"
+        )
         self.table = self.dynamodb.Table(self.table_name)
 
         # T011: Bedrock Agent client initialization
@@ -131,6 +135,8 @@ class KBCatalogManager:
 
         Returns:
             Tuple of (is_valid, error_message)
+
+        T029: Query GSI for uniqueness check per user
         """
         # Check length
         if not catalog_name or len(catalog_name) < 1:
@@ -145,11 +151,11 @@ class KBCatalogManager:
                 "Catalog name can only contain letters, numbers, spaces, hyphens, and underscores",
             )
 
-        # Check for uniqueness (case-insensitive)
+        # Check for uniqueness (case-insensitive) using GSI
         try:
             existing_catalogs = self.list_user_catalogs()
             for cat in existing_catalogs:
-                if cat["catalog_name"].lower() == catalog_name.lower():
+                if cat.get("catalog_name", "").lower() == catalog_name.lower():
                     return False, f"A catalog named '{catalog_name}' already exists"
         except Exception as e:
             logger.error(f"Error checking catalog uniqueness: {e}")
@@ -190,16 +196,22 @@ class KBCatalogManager:
 
         Returns:
             Dict with catalog metadata
+
+        New key schema (T016):
+        - PK: catalog_id
+        - SK: METADATA
+        - user_id stored as regular attribute for GSI
         """
         if not catalog_id:
             catalog_id = self._generate_catalog_id()
         timestamp = self._get_timestamp()
         s3_prefix = f"{self.user_id}/{catalog_id}/"
 
+        # T016/T027: New key schema with catalog_id as PK and user_id as attribute
         item = {
-            "userId": self.user_id,
-            "sk": f"CATALOG#{catalog_id}",
-            "catalog_id": catalog_id,
+            "catalog_id": catalog_id,  # PK
+            "sk": "METADATA",  # SK for catalog records
+            "user_id": self.user_id,  # T027: Regular attribute for GSI
             "catalog_name": catalog_name,
             "description": description,
             "data_source_id": data_source_id,
@@ -213,7 +225,7 @@ class KBCatalogManager:
         }
 
         self.table.put_item(Item=item)
-        logger.info(f"! Created catalog: {catalog_id} - {catalog_name}")
+        logger.info(f"!!! Created catalog: {catalog_id} - {catalog_name}")
 
         return item
 
@@ -225,12 +237,19 @@ class KBCatalogManager:
 
         Returns:
             Catalog dict or None if not found
+
+        T018: New key schema - PK=catalog_id, SK=METADATA
         """
         try:
             response = self.table.get_item(
-                Key={"userId": self.user_id, "sk": f"CATALOG#{catalog_id}"}
+                Key={"catalog_id": catalog_id, "sk": "METADATA"}
             )
-            return response.get("Item")
+            item = response.get("Item")
+            # Verify ownership (multi-tenant isolation)
+            if item and item.get("user_id") != self.user_id:
+                logger.warning(f"Catalog {catalog_id} belongs to different user")
+                return None
+            return item
         except Exception as e:
             logger.error(f"Error getting catalog {catalog_id}: {e}")
             return None
@@ -240,13 +259,36 @@ class KBCatalogManager:
 
         Returns:
             List of catalog dicts
+
+        T020: Query GSI user_id-index, then fetch full items
         """
         try:
+            # Step 1: Query GSI to get catalog_ids for this user
             response = self.table.query(
-                KeyConditionExpression="userId = :uid AND begins_with(sk, :prefix)",
-                ExpressionAttributeValues={":uid": self.user_id, ":prefix": "CATALOG#"},
+                IndexName="user_id-index",
+                KeyConditionExpression="user_id = :uid",
+                ExpressionAttributeValues={":uid": self.user_id},
             )
-            return response.get("Items", [])
+
+            # GSI returns only keys (KEYS_ONLY projection)
+            catalog_keys = response.get("Items", [])
+
+            if not catalog_keys:
+                return []
+
+            # Step 2: Batch get full catalog records
+            # Filter to only METADATA records (catalogs, not documents)
+            catalogs = []
+            for key_item in catalog_keys:
+                catalog_id = key_item.get("catalog_id")
+                sk = key_item.get("sk", "")
+                # Only fetch catalog metadata records, not document records
+                if sk == "METADATA":
+                    catalog = self.get_catalog(catalog_id)
+                    if catalog:
+                        catalogs.append(catalog)
+
+            return catalogs
         except Exception as e:
             logger.error(f"Error listing catalogs: {e}")
             return []
@@ -263,12 +305,15 @@ class KBCatalogManager:
 
         Returns:
             True if successful
+
+        T024: New key schema - PK=catalog_id, SK=METADATA
         """
         try:
             update_expr = "SET indexing_status = :status, updated_at = :updated"
             expr_values = {
                 ":status": indexing_status,
                 ":updated": self._get_timestamp(),
+                ":uid": self.user_id,
             }
 
             if last_sync_at is not None:
@@ -276,9 +321,10 @@ class KBCatalogManager:
                 expr_values[":sync"] = last_sync_at
 
             self.table.update_item(
-                Key={"userId": self.user_id, "sk": f"CATALOG#{catalog_id}"},
+                Key={"catalog_id": catalog_id, "sk": "METADATA"},
                 UpdateExpression=update_expr,
                 ExpressionAttributeValues=expr_values,
+                ConditionExpression="user_id = :uid",
             )
             logger.info(f"Updated catalog {catalog_id} status to {indexing_status}")
             return True
@@ -294,11 +340,17 @@ class KBCatalogManager:
 
         Returns:
             True if successful
+
+        T022: New key schema - PK=catalog_id, SK=METADATA
         """
         try:
-            self.table.delete_item(
-                Key={"userId": self.user_id, "sk": f"CATALOG#{catalog_id}"}
-            )
+            # Verify ownership before delete
+            catalog = self.get_catalog(catalog_id)
+            if not catalog:
+                logger.warning(f"Catalog {catalog_id} not found or not owned by user")
+                return False
+
+            self.table.delete_item(Key={"catalog_id": catalog_id, "sk": "METADATA"})
             logger.info(f"Deleted catalog record: {catalog_id}")
             return True
         except Exception as e:
@@ -328,15 +380,18 @@ class KBCatalogManager:
 
         Returns:
             Dict with document metadata
+
+        T017/T028: New key schema - PK=catalog_id, SK=DOC#{document_id}
+        user_id stored as regular attribute (denormalized)
         """
         document_id = self._generate_document_id()
         timestamp = self._get_timestamp()
 
         item = {
-            "userId": self.user_id,
-            "sk": f"DOCUMENT#{catalog_id}#{document_id}",
+            "catalog_id": catalog_id,  # PK
+            "sk": f"DOC#{document_id}",  # SK for document records
             "document_id": document_id,
-            "catalog_id": catalog_id,
+            "user_id": self.user_id,  # T028: Denormalized for queries/filtering
             "filename": filename,
             "file_type": file_type,
             "file_size_bytes": file_size_bytes,
@@ -363,15 +418,22 @@ class KBCatalogManager:
 
         Returns:
             Document dict or None if not found
+
+        T019: New key schema - PK=catalog_id, SK=DOC#{document_id}
         """
         try:
             response = self.table.get_item(
                 Key={
-                    "userId": self.user_id,
-                    "sk": f"DOCUMENT#{catalog_id}#{document_id}",
+                    "catalog_id": catalog_id,
+                    "sk": f"DOC#{document_id}",
                 }
             )
-            return response.get("Item")
+            item = response.get("Item")
+            # Verify ownership (multi-tenant isolation)
+            if item and item.get("user_id") != self.user_id:
+                logger.warning(f"Document {document_id} belongs to different user")
+                return None
+            return item
         except Exception as e:
             logger.error(f"Error getting document {document_id}: {e}")
             return None
@@ -384,13 +446,21 @@ class KBCatalogManager:
 
         Returns:
             List of document dicts
+
+        T021: New key schema - PK=catalog_id, SK begins_with DOC#
         """
         try:
+            # Verify user owns this catalog first
+            catalog = self.get_catalog(catalog_id)
+            if not catalog:
+                logger.warning(f"Catalog {catalog_id} not found or not owned by user")
+                return []
+
             response = self.table.query(
-                KeyConditionExpression="userId = :uid AND begins_with(sk, :prefix)",
+                KeyConditionExpression="catalog_id = :cid AND begins_with(sk, :prefix)",
                 ExpressionAttributeValues={
-                    ":uid": self.user_id,
-                    ":prefix": f"DOCUMENT#{catalog_id}#",
+                    ":cid": catalog_id,
+                    ":prefix": "DOC#",
                 },
             )
             return response.get("Items", [])
@@ -417,10 +487,15 @@ class KBCatalogManager:
 
         Returns:
             True if successful
+
+        T025: New key schema - PK=catalog_id, SK=DOC#{document_id}
         """
         try:
             update_expr = "SET indexing_status = :status"
-            expr_values = {":status": indexing_status}
+            expr_values = {
+                ":status": indexing_status,
+                ":uid": self.user_id,
+            }
 
             if indexed_at is not None:
                 update_expr += ", indexed_at = :indexed"
@@ -432,11 +507,12 @@ class KBCatalogManager:
 
             self.table.update_item(
                 Key={
-                    "userId": self.user_id,
-                    "sk": f"DOCUMENT#{catalog_id}#{document_id}",
+                    "catalog_id": catalog_id,
+                    "sk": f"DOC#{document_id}",
                 },
                 UpdateExpression=update_expr,
                 ExpressionAttributeValues=expr_values,
+                ConditionExpression="user_id = :uid",
             )
             logger.info(f"Updated document {document_id} status to {indexing_status}")
             return True
@@ -453,12 +529,20 @@ class KBCatalogManager:
 
         Returns:
             True if successful
+
+        T023: New key schema - PK=catalog_id, SK=DOC#{document_id}
         """
         try:
+            # Verify ownership before delete
+            doc = self.get_document(catalog_id, document_id)
+            if not doc:
+                logger.warning(f"Document {document_id} not found or not owned by user")
+                return False
+
             self.table.delete_item(
                 Key={
-                    "userId": self.user_id,
-                    "sk": f"DOCUMENT#{catalog_id}#{document_id}",
+                    "catalog_id": catalog_id,
+                    "sk": f"DOC#{document_id}",
                 }
             )
             logger.info(f"Deleted document record: {document_id}")
@@ -476,19 +560,53 @@ class KBCatalogManager:
 
         Returns:
             True if successful
+
+        T026: New key schema - PK=catalog_id, SK=METADATA
         """
         try:
             self.table.update_item(
-                Key={"userId": self.user_id, "sk": f"CATALOG#{catalog_id}"},
+                Key={"catalog_id": catalog_id, "sk": "METADATA"},
                 UpdateExpression="SET document_count = document_count + :delta, updated_at = :updated",
                 ExpressionAttributeValues={
                     ":delta": delta,
                     ":updated": self._get_timestamp(),
+                    ":uid": self.user_id,
                 },
+                ConditionExpression="user_id = :uid",
             )
             return True
         except Exception as e:
             logger.error(f"Error updating catalog document count: {e}")
+            return False
+
+    def update_catalog_total_size(self, catalog_id: str, size_delta_bytes: int) -> bool:
+        """Update catalog total_size_bytes.
+
+        Args:
+            catalog_id: Catalog identifier
+            size_delta_bytes: Change in size (positive for add, negative for delete)
+
+        Returns:
+            True if successful
+        """
+        try:
+            self.table.update_item(
+                Key={"catalog_id": catalog_id, "sk": "METADATA"},
+                UpdateExpression="SET total_size_bytes = if_not_exists(total_size_bytes, :zero) + :delta, updated_at = :updated",
+                ExpressionAttributeValues={
+                    ":delta": size_delta_bytes,
+                    ":zero": 0,
+                    ":updated": self._get_timestamp(),
+                    ":uid": self.user_id,
+                },
+                ConditionExpression="user_id = :uid",
+            )
+            logger.info(
+                f"Updated catalog {catalog_id} total_size_bytes by {size_delta_bytes}"
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Error updating catalog total size: {e}")
             return False
 
     # ============================================================
@@ -786,6 +904,134 @@ class KBCatalogManager:
             Ingestion job ID
         """
         return self.start_ingestion(data_source_id)
+
+    def get_latest_ingestion_job(self, data_source_id: str) -> Optional[Dict[str, Any]]:
+        """Get the most recent ingestion job for a data source.
+
+        Args:
+            data_source_id: Data source identifier
+
+        Returns:
+            Dict with latest job info or None if no jobs found
+        """
+        if not self.kb_id:
+            raise ValueError("KB_ID environment variable not set")
+
+        try:
+            response = self.bedrock_agent.list_ingestion_jobs(
+                knowledgeBaseId=self.kb_id,
+                dataSourceId=data_source_id,
+                maxResults=1,
+                sortBy={"attribute": "STARTED_AT", "order": "DESCENDING"},
+            )
+
+            jobs = response.get("ingestionJobSummaries", [])
+            if not jobs:
+                return None
+
+            latest = jobs[0]
+            return {
+                "job_id": latest.get("ingestionJobId"),
+                "status": latest.get("status"),
+                "started_at": latest.get("startedAt"),
+                "updated_at": latest.get("updatedAt"),
+                "statistics": latest.get("statistics", {}),
+            }
+        except ClientError as e:
+            logger.error(f"Error listing ingestion jobs: {e}")
+            return None
+
+    def sync_catalog_status_from_bedrock(self, catalog_id: str) -> Dict[str, Any]:
+        """Sync catalog and document status from Bedrock ingestion job status.
+
+        Polls Bedrock for the latest ingestion job status and updates
+        DynamoDB records accordingly.
+
+        Args:
+            catalog_id: Catalog identifier
+
+        Returns:
+            Dict with sync results
+        """
+        catalog = self.get_catalog(catalog_id)
+        if not catalog:
+            return {"error": "Catalog not found"}
+
+        data_source_id = catalog.get("data_source_id")
+        if not data_source_id:
+            return {"error": "No data source configured", "status": "no_data_source"}
+
+        # Get latest ingestion job
+        latest_job = self.get_latest_ingestion_job(data_source_id)
+        if not latest_job:
+            return {
+                "status": "no_jobs",
+                "catalog_status": catalog.get("indexing_status"),
+            }
+
+        job_status = latest_job.get("status", "UNKNOWN")
+        statistics = latest_job.get("statistics", {})
+
+        # Map Bedrock status to our status
+        # Bedrock statuses: STARTING, IN_PROGRESS, COMPLETE, FAILED, STOPPING, STOPPED
+        status_map = {
+            "STARTING": "indexing",
+            "IN_PROGRESS": "indexing",
+            "COMPLETE": "ready",
+            "FAILED": "error",
+            "STOPPING": "indexing",
+            "STOPPED": "error",
+        }
+        new_status = status_map.get(job_status, "unknown")
+
+        # Update catalog status
+        last_sync_at = None
+        if job_status == "COMPLETE":
+            last_sync_at = self._get_timestamp()
+
+        self.update_catalog_status(catalog_id, new_status, last_sync_at)
+
+        # Update document statuses based on job completion
+        documents = self.list_documents_in_catalog(catalog_id)
+        docs_updated = 0
+
+        if job_status == "COMPLETE":
+            # Mark all documents as indexed
+            for doc in documents:
+                if doc.get("indexing_status") != "indexed":
+                    self.update_document_status(
+                        catalog_id,
+                        doc["document_id"],
+                        "indexed",
+                        indexed_at=self._get_timestamp(),
+                    )
+                    docs_updated += 1
+        elif job_status == "FAILED":
+            # Mark documents as failed
+            for doc in documents:
+                if doc.get("indexing_status") in ("pending", "indexing", "uploading"):
+                    failure_reasons = latest_job.get("failure_reasons", [])
+                    error_msg = (
+                        "; ".join(failure_reasons)
+                        if failure_reasons
+                        else "Ingestion failed"
+                    )
+                    self.update_document_status(
+                        catalog_id,
+                        doc["document_id"],
+                        "failed",
+                        error_message=error_msg,
+                    )
+                    docs_updated += 1
+
+        return {
+            "status": new_status,
+            "bedrock_status": job_status,
+            "job_id": latest_job.get("job_id"),
+            "statistics": statistics,
+            "documents_updated": docs_updated,
+            "last_sync_at": last_sync_at,
+        }
 
     # ============================================================
     # Session State Management (Phase 4 - US2)

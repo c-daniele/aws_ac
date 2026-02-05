@@ -306,8 +306,9 @@ def upload_to_catalog(
         # Update document status to pending
         manager.update_document_status(catalog_id, document_id, "pending")
 
-        # Update catalog document count
+        # Update catalog document count and total size
         manager.update_catalog_document_count(catalog_id, 1)
+        manager.update_catalog_total_size(catalog_id, len(file_bytes))
 
         # Start ingestion job if data source exists
         data_source_id = catalog.get("data_source_id")
@@ -596,6 +597,9 @@ def get_indexing_status(
 ) -> Dict[str, Any]:
     """Check the indexing status of documents in a catalog.
 
+    This tool polls Bedrock for the actual ingestion job status and
+    updates the DynamoDB records with the latest state.
+
     Shows overall catalog status and per-document indexing progress.
 
     Args:
@@ -614,6 +618,11 @@ def get_indexing_status(
                 f"Catalog '{catalog_id}' not found", "CATALOG_NOT_FOUND"
             )
 
+        # Sync status from Bedrock (polls latest ingestion job)
+        sync_result = manager.sync_catalog_status_from_bedrock(catalog_id)
+
+        # Re-fetch catalog and documents after sync
+        catalog = manager.get_catalog(catalog_id)
         documents = manager.list_documents_in_catalog(catalog_id)
 
         # Count by status
@@ -635,11 +644,27 @@ def get_indexing_status(
 
         # Build status message
         lines = [f"Catalog '{catalog['catalog_name']}' indexing status:\n"]
+
+        # Show sync info if available
+        if sync_result.get("bedrock_status"):
+            lines.append(
+                f"- **Bedrock Job Status**: {sync_result.get('bedrock_status')}"
+            )
+            stats = sync_result.get("statistics", {})
+            if stats:
+                lines.append(
+                    f"- **Stats**: {stats.get('numberOfDocumentsScanned', 0)} scanned, "
+                    f"{stats.get('numberOfNewDocumentsIndexed', 0)} new, "
+                    f"{stats.get('numberOfModifiedDocumentsIndexed', 0)} modified, "
+                    f"{stats.get('numberOfDocumentsFailed', 0)} failed"
+                )
+
         lines.append(
             f"- **Overall**: {overall_status} ({status_counts['indexed']} of {total} documents ready)"
         )
 
         if documents:
+            lines.append("\n**Documents:**")
             for doc in documents:
                 status = doc.get("indexing_status", "unknown")
                 icon = (
@@ -654,13 +679,20 @@ def get_indexing_status(
                     )
                 )
                 doc_name = doc.get("filename", doc.get("document_id", "unknown"))
-                lines.append(f"- {doc_name}: {icon} {status}")
+                error_msg = doc.get("error_message", "")
+                status_text = f"{icon} {status}"
+                if error_msg:
+                    status_text += f" - {error_msg}"
+                lines.append(f"- {doc_name}: {status_text}")
 
         return _success_response(
             "\n".join(lines),
             {
                 "catalog_id": catalog_id,
                 "overall_status": overall_status,
+                "bedrock_status": sync_result.get("bedrock_status"),
+                "job_id": sync_result.get("job_id"),
+                "statistics": sync_result.get("statistics", {}),
                 "documents": {
                     "indexed": status_counts["indexed"],
                     "indexing": status_counts["indexing"],
@@ -714,6 +746,7 @@ def delete_catalog_document(
             )
 
         filename = document.get("filename", "Unknown")
+        file_size = document.get("file_size_bytes", 0)
 
         # Delete from S3
         if document.get("s3_key"):
@@ -722,8 +755,10 @@ def delete_catalog_document(
         # Delete DynamoDB record
         manager.delete_document_record(catalog_id, document_id)
 
-        # Update catalog document count
+        # Update catalog document count and total size
         manager.update_catalog_document_count(catalog_id, -1)
+        if file_size > 0:
+            manager.update_catalog_total_size(catalog_id, -file_size)
 
         # Trigger vector cleanup if data source exists
         data_source_id = catalog.get("data_source_id")
