@@ -213,19 +213,20 @@ export function BrowserLiveViewModal({
                     console.log('[DCV] Connected successfully');
                     setLoading(false);
 
-                    // Keep browser at 1536×1296 (Nova Act optimal range: 1536-2304 width, 864-1296 height)
+                    // Nova Act recommended resolution: 1600x900 (width 1280-1920, height 650-976)
                     // Scaling is handled by displayLayout callback
                     // Request display layout to ensure proper size
                     if (connectionRef.current?.requestDisplayLayout) {
                       try {
                         const resizeDisplay = () => {
+                          if (!connectionRef.current?.requestDisplayLayout) return;
                           connectionRef.current.requestDisplayLayout([{
                             name: "Main Display",
                             rect: {
                               x: 0,
                               y: 0,
-                              width: 1536,
-                              height: 1296
+                              width: 1600,
+                              height: 900
                             },
                             primary: true
                           }]);
@@ -236,7 +237,7 @@ export function BrowserLiveViewModal({
                         setTimeout(resizeDisplay, 500);
                         setTimeout(resizeDisplay, 2000);
 
-                        console.log('[DCV] Browser resolution set to 1536×1296');
+                        console.log('[DCV] Browser resolution set to 1600×900');
                       } catch (e) {
                         console.warn('[DCV] Could not set display layout:', e);
                       }
@@ -346,9 +347,9 @@ export function BrowserLiveViewModal({
         const display = document.getElementById('dcv-display-container');
 
         if (display && display.parentElement) {
-          // Get current browser resolution from display element
-          const browserWidth = parseInt(display.style.width) || 1536;
-          const browserHeight = parseInt(display.style.height) || 1296;
+          // Nova Act recommended resolution: 1600x900
+          const browserWidth = parseInt(display.style.width) || 1600;
+          const browserHeight = parseInt(display.style.height) || 900;
 
           // Get actual parent container dimensions
           const parent = display.parentElement;
@@ -391,11 +392,11 @@ export function BrowserLiveViewModal({
       <DialogContent
         className="!max-w-none p-0 flex flex-col gap-0 border-0 shadow-2xl rounded-xl overflow-hidden"
         style={{
-          aspectRatio: '1536/1296',
+          aspectRatio: '16/9',
           maxWidth: '90vw',
           maxHeight: '90vh',
-          width: 'min(90vw, calc(90vh * 1536 / 1296))',
-          height: 'min(90vh, calc(90vw * 1296 / 1536))'
+          width: 'min(90vw, calc(90vh * 16 / 9))',
+          height: 'min(90vh, calc(90vw * 9 / 16))'
         }}
       >
         <DialogHeader className="px-4 py-2 bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm border-b border-slate-200/50 dark:border-slate-700/50 flex-shrink-0">

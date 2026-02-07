@@ -4,6 +4,7 @@ import React, { startTransition } from "react"
 import { useState, useRef, useEffect, useCallback, useMemo } from "react"
 import { useChat } from "@/hooks/useChat"
 import { useArtifacts } from "@/hooks/useArtifacts"
+import { useCanvasHandlers } from "@/hooks/useCanvasHandlers"
 import { useAgentExecutions } from "@/hooks/useAgentExecutions"
 import { ArtifactType } from "@/types/artifact"
 import { ChatMessage } from "@/components/chat/ChatMessage"
@@ -11,11 +12,10 @@ import { AssistantTurn } from "@/components/chat/AssistantTurn"
 import { Greeting } from "@/components/Greeting"
 import { ChatSidebar } from "@/components/ChatSidebar"
 import { ToolsDropdown } from "@/components/ToolsDropdown"
-import { BrowserLiveViewButton } from "@/components/BrowserLiveViewButton"
 import { BrowserResultModal } from "@/components/BrowserResultModal"
 import { InterruptApprovalModal } from "@/components/InterruptApprovalModal"
 import { SwarmProgress } from "@/components/SwarmProgress"
-import { Canvas } from "@/components/Canvas"
+import { Canvas } from "@/components/canvas"
 import { VoiceAnimation } from "@/components/VoiceAnimation"
 import { ComposeWizard, ComposeConfig } from "@/components/ComposeWizard"
 import { ChatInputArea } from "@/components/chat/ChatInputArea"
@@ -109,14 +109,76 @@ export function ChatInterface() {
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false)
   const isAutoScrollingRef = useRef(false)
 
-  // Ref for artifact refresh callback (to avoid circular dependency)
-  const refreshArtifactsRef = useRef<(() => void) | null>(null)
+  // Canvas handlers (centralized document artifact handling)
+  const {
+    handleArtifactUpdated,
+    handleWordDocumentsCreated,
+    handleExcelDocumentsCreated,
+    handlePptDocumentsCreated,
+    handleExtractedDataCreated,
+    handleOpenResearchArtifact,
+    handleOpenWordArtifact,
+    handleOpenExcelArtifact,
+    handleOpenPptArtifact,
+    handleOpenExtractedDataArtifact,
+    setArtifactMethods,
+  } = useCanvasHandlers()
 
-  // Memoize the artifact update callback to prevent infinite loops
-  const handleArtifactUpdated = useCallback(() => {
-    if (refreshArtifactsRef.current) {
-      refreshArtifactsRef.current()
+  // Refs for browser session handling (to avoid circular dependency with useArtifacts)
+  const addArtifactRef = useRef<typeof addArtifact | null>(null)
+  const openCanvasRef = useRef<(() => void) | null>(null)
+  const setBrowserArtifactIdRef = useRef<typeof setBrowserArtifactId | null>(null)
+
+  // Handler for browser session detection - creates artifact and opens Canvas
+  const handleBrowserSessionDetected = useCallback((browserSessionId: string, browserId: string) => {
+    console.log('[ChatInterface] Browser session detected:', browserSessionId, browserId)
+
+    const artifactId = `browser-${browserSessionId}`
+    const addArtifact = addArtifactRef.current
+    const openCanvas = openCanvasRef.current
+    const setBrowserArtifactId = setBrowserArtifactIdRef.current
+
+    if (!addArtifact || !openCanvas || !setBrowserArtifactId) {
+      console.warn('[ChatInterface] Artifact methods not ready yet')
+      return
     }
+
+    // Create browser artifact
+    const browserArtifact = {
+      id: artifactId,
+      type: 'browser' as const,
+      title: 'Browser View',
+      content: '',
+      description: 'Real-time browser automation view',
+      timestamp: new Date().toISOString(),
+      metadata: {
+        browserSessionId,
+        browserId,
+      },
+    }
+
+    addArtifact(browserArtifact)
+
+    // Also save to sessionStorage for persistence across page reloads
+    const currentSessionId = sessionStorage.getItem('chat-session-id')
+    if (currentSessionId) {
+      const artifactsKey = `artifacts-${currentSessionId}`
+      const stored = sessionStorage.getItem(artifactsKey)
+      const existingArtifacts = stored ? JSON.parse(stored) : []
+
+      // Check if browser artifact already exists
+      const existingIndex = existingArtifacts.findIndex((a: any) => a.id === artifactId)
+      if (existingIndex >= 0) {
+        existingArtifacts[existingIndex] = browserArtifact
+      } else {
+        existingArtifacts.push(browserArtifact)
+      }
+      sessionStorage.setItem(artifactsKey, JSON.stringify(existingArtifacts))
+    }
+
+    // Set browser artifact ID and open canvas
+    setBrowserArtifactId(artifactId)
+    openCanvas()
   }, [])
 
   const {
@@ -150,7 +212,12 @@ export function ChatInterface() {
     finalizeVoiceMessage,
     addArtifactMessage,
   } = useChat({
-    onArtifactUpdated: handleArtifactUpdated
+    onArtifactUpdated: handleArtifactUpdated,
+    onWordDocumentsCreated: handleWordDocumentsCreated,
+    onExcelDocumentsCreated: handleExcelDocumentsCreated,
+    onPptDocumentsCreated: handlePptDocumentsCreated,
+    onBrowserSessionDetected: handleBrowserSessionDetected,
+    onExtractedDataCreated: handleExtractedDataCreated,
   })
 
   // Calculate tool counts considering nested tools in dynamic groups (excluding Research Agent)
@@ -221,16 +288,37 @@ export function ChatInterface() {
     justUpdated: artifactJustUpdated,
   } = useArtifacts(groupedMessages, sessionId)
 
-  // Update ref after useArtifacts initializes (to avoid circular dependency with useChat)
+  // Connect artifact methods to canvas handlers (to avoid circular dependency with useChat)
   useEffect(() => {
-    refreshArtifactsRef.current = refreshArtifacts
-  }, [refreshArtifacts])
+    setArtifactMethods({
+      artifacts,
+      refreshArtifacts,
+      addArtifact,
+      openArtifact: openArtifactBase,
+    })
+  }, [artifacts, refreshArtifacts, addArtifact, openArtifactBase, setArtifactMethods])
 
   // Composer artifact ID tracking
   const [composeArtifactId, setComposeArtifactId] = useState<string | null>(null)
 
   // Research artifact ID tracking
   const [researchArtifactId, setResearchArtifactId] = useState<string | null>(null)
+
+  // Browser artifact ID tracking (for Live View in Canvas)
+  const [browserArtifactId, setBrowserArtifactId] = useState<string | null>(null)
+
+  // Update browser session handling refs (to avoid circular dependency)
+  useEffect(() => {
+    addArtifactRef.current = addArtifact
+  }, [addArtifact])
+
+  useEffect(() => {
+    openCanvasRef.current = openCanvasBase
+  }, [openCanvasBase])
+
+  useEffect(() => {
+    setBrowserArtifactIdRef.current = setBrowserArtifactId
+  }, [setBrowserArtifactId])
 
   // Artifact editing state
   const [editingArtifact, setEditingArtifact] = useState<{
@@ -369,38 +457,123 @@ export function ChatInterface() {
 
   const handleResearchConfirmPlan = useCallback((approved: boolean) => {
     researchRef.current.confirmPlanResponse(approved)
-    // If declined, close canvas
     if (!approved) {
       researchRef.current.reset()
       setResearchArtifactId(null)
+      processedInterruptRef.current = null
       closeCanvas()
     }
   }, [closeCanvas])
 
   const handleResearchCancel = useCallback(() => {
-    // Send rejection response if plan confirmation is showing
     if (researchRef.current.showPlanConfirm) {
       researchRef.current.confirmPlanResponse(false)
     }
     researchRef.current.reset()
     setResearchArtifactId(null)
+    processedInterruptRef.current = null
     closeCanvas()
   }, [closeCanvas])
 
-  // Ref for artifacts to avoid stale closure in callbacks
-  const artifactsRef = useRef(artifacts)
-  artifactsRef.current = artifacts
+  // Browser Canvas callbacks - handle connection errors and validation failures
+  const handleBrowserConnectionError = useCallback(() => {
+    console.log('[ChatInterface] Browser connection error, removing artifact')
+    if (browserArtifactId) {
+      removeArtifact(browserArtifactId)
+      setBrowserArtifactId(null)
 
-  // Handle "View in Canvas" from chat - open Canvas with the research artifact
-  const handleOpenResearchArtifact = useCallback((executionId: string) => {
-    // Artifact ID matches backend: research-{toolUseId} where toolUseId = executionId
-    const artifactId = `research-${executionId}`
-    // Check if artifact exists (use ref to get latest artifacts)
-    const artifact = artifactsRef.current.find(a => a.id === artifactId)
-    if (artifact) {
-      openArtifact(artifactId)
+      // Also remove from sessionStorage
+      const currentSessionId = sessionStorage.getItem('chat-session-id')
+      if (currentSessionId) {
+        const artifactsKey = `artifacts-${currentSessionId}`
+        const stored = sessionStorage.getItem(artifactsKey)
+        if (stored) {
+          const artifacts = JSON.parse(stored).filter((a: any) => a.id !== browserArtifactId)
+          sessionStorage.setItem(artifactsKey, JSON.stringify(artifacts))
+        }
+      }
     }
-  }, [openArtifact])
+  }, [browserArtifactId, removeArtifact])
+
+  const handleBrowserValidationFailed = useCallback(() => {
+    console.log('[ChatInterface] Browser session validation failed, removing artifact')
+    if (browserArtifactId) {
+      removeArtifact(browserArtifactId)
+      setBrowserArtifactId(null)
+
+      // Also remove from sessionStorage
+      const currentSessionId = sessionStorage.getItem('chat-session-id')
+      if (currentSessionId) {
+        const artifactsKey = `artifacts-${currentSessionId}`
+        const stored = sessionStorage.getItem(artifactsKey)
+        if (stored) {
+          const artifacts = JSON.parse(stored).filter((a: any) => a.id !== browserArtifactId)
+          sessionStorage.setItem(artifactsKey, JSON.stringify(artifacts))
+        }
+      }
+    }
+  }, [browserArtifactId, removeArtifact])
+
+  // Restore and validate browser artifact on page load
+  useEffect(() => {
+    if (!sessionId) return
+
+    // Check if we have a browser artifact that needs to be restored
+    const existingBrowserArtifact = artifacts.find(a => a.type === 'browser')
+    if (existingBrowserArtifact && !browserArtifactId) {
+      console.log('[ChatInterface] Found browser artifact, validating session...')
+
+      // Get browserSession info from artifact metadata or sessionStorage
+      const metadata = existingBrowserArtifact.metadata
+      const browserSessionId = metadata?.browserSessionId || browserSession?.sessionId
+      const browserId = metadata?.browserId || browserSession?.browserId
+
+      if (!browserSessionId) {
+        // No session info - remove invalid artifact
+        console.log('[ChatInterface] No browser session info, removing artifact')
+        removeArtifact(existingBrowserArtifact.id)
+        return
+      }
+
+      // Validate the session
+      const validateAndRestore = async () => {
+        try {
+          let validateUrl = `/api/browser/validate-session?sessionId=${encodeURIComponent(browserSessionId)}`
+          if (browserId) {
+            validateUrl += `&browserId=${encodeURIComponent(browserId)}`
+          }
+
+          const response = await fetch(validateUrl)
+          const data = await response.json()
+
+          if (data.isValid) {
+            // Session is valid - restore artifact
+            console.log('[ChatInterface] Browser session valid, restoring artifact')
+            setBrowserArtifactId(existingBrowserArtifact.id)
+            openCanvasRef.current?.()
+          } else {
+            // Session is invalid - remove artifact
+            console.log('[ChatInterface] Browser session invalid, removing artifact')
+            removeArtifact(existingBrowserArtifact.id)
+
+            // Also remove from sessionStorage
+            const artifactsKey = `artifacts-${sessionId}`
+            const stored = sessionStorage.getItem(artifactsKey)
+            if (stored) {
+              const artifacts = JSON.parse(stored).filter((a: any) => a.id !== existingBrowserArtifact.id)
+              sessionStorage.setItem(artifactsKey, JSON.stringify(artifacts))
+            }
+          }
+        } catch (error) {
+          console.warn('[ChatInterface] Failed to validate browser session:', error)
+          // On error, still restore artifact - let BrowserLiveView handle connection
+          setBrowserArtifactId(existingBrowserArtifact.id)
+        }
+      }
+
+      validateAndRestore()
+    }
+  }, [sessionId, artifacts, browserArtifactId, browserSession, removeArtifact])
 
   // Close canvas when left sidebar opens
   useEffect(() => {
@@ -494,6 +667,21 @@ export function ChatInterface() {
     }
   }, [availableTools])
 
+  // Reset research state when a new research starts
+  // This allows the second research in the same session to show the HITL modal
+  const prevAgentStatusRef = useRef<string | null>(null)
+  useEffect(() => {
+    // When transitioning to 'researching' from another status, reset the research artifact
+    if (agentStatus === 'researching' && prevAgentStatusRef.current !== 'researching') {
+      if (researchArtifactId && researchArtifactId !== 'in-progress') {
+        // Previous research was completed, reset for new research
+        setResearchArtifactId(null)
+        researchRef.current.reset()
+      }
+    }
+    prevAgentStatusRef.current = agentStatus
+  }, [agentStatus, researchArtifactId])
+
   // Connect research_progress events to useResearch hook
   useEffect(() => {
     if (researchProgress && researchArtifactId) {
@@ -509,11 +697,9 @@ export function ChatInterface() {
     if (currentInterrupt && currentInterrupt.interrupts.length > 0) {
       const interrupt = currentInterrupt.interrupts[0]
 
-      // Skip if already processed this interrupt
       if (interrupt.name === "chatbot-research-approval" &&
           !researchArtifactId &&
           processedInterruptRef.current !== interrupt.id) {
-        console.log('[ChatInterface] Research interrupt detected, opening Canvas')
 
         // Mark as processed
         processedInterruptRef.current = interrupt.id
@@ -625,45 +811,56 @@ export function ChatInterface() {
         // Artifact ID is research-{toolUseId} where toolUseId = executionId
         const targetArtifactId = `research-${executionId}`
 
-        // Backend saves artifact to agent.state - refresh to load it
-        // Short delay to ensure backend has finished saving
-        setTimeout(async () => {
-          if (sessionId) {
-            const refreshedArtifacts = await refreshArtifacts({ skipFlashEffect: true })
-            // Find artifact by ID (mapped via toolUseId/executionId)
-            const researchArtifact = refreshedArtifacts.find(
-              a => a.id === targetArtifactId
-            )
-            // Use startTransition for lower-priority state updates
-            // This prevents interrupting the main chat UI rendering
-            startTransition(() => {
-              if (researchArtifact) {
-                setSelectedArtifactId(researchArtifact.id)
-              }
-              setResearchArtifactId(null)
-              researchRef.current.reset()
-            })
-          } else {
-            // No sessionId - just clean up
-            startTransition(() => {
-              setResearchArtifactId(null)
-              researchRef.current.reset()
-            })
+        // Add artifact directly to state (backend also saves it)
+        // No need to call refreshArtifacts which triggers unnecessary API calls
+        addArtifact({
+          id: targetArtifactId,
+          type: 'research',
+          title: title,
+          content: content,
+          description: '',
+          timestamp: new Date().toISOString(),
+          sessionId: sessionId || undefined,
+        })
+
+        // Update sessionStorage for persistence
+        if (sessionId) {
+          const artifactsKey = `artifacts-${sessionId}`
+          const stored = sessionStorage.getItem(artifactsKey)
+          const existingArtifacts = stored ? JSON.parse(stored) : []
+          const newArtifact = {
+            id: targetArtifactId,
+            type: 'research',
+            title: title,
+            content: content,
+            metadata: { description: '' },
+            created_at: new Date().toISOString(),
           }
-        }, 500)
+          // Check if artifact already exists
+          const existingIndex = existingArtifacts.findIndex((a: any) => a.id === targetArtifactId)
+          if (existingIndex >= 0) {
+            existingArtifacts[existingIndex] = newArtifact
+          } else {
+            existingArtifacts.push(newArtifact)
+          }
+          sessionStorage.setItem(artifactsKey, JSON.stringify(existingArtifacts))
+        }
+
+        // Select the artifact and clean up research state (synchronous updates)
+        setSelectedArtifactId(targetArtifactId)
+        setResearchArtifactId(null)
+        researchRef.current.reset()
       } else if (data.status === 'error' || data.status === 'declined') {
         processedResearchIdsRef.current.add(executionId)
-        // Just clean up research state
-        if (researchArtifactId) {
-          startTransition(() => {
-            setResearchArtifactId(null)
-            researchRef.current.reset()
-          })
+        // Only cleanup if this is the active research (not 'in-progress' waiting for new one)
+        if (researchArtifactId && researchArtifactId !== 'in-progress') {
+          setResearchArtifactId(null)
+          researchRef.current.reset()
           closeCanvas()
         }
       }
     }
-  }, [researchData, researchArtifactId, closeCanvas, openArtifact, refreshArtifacts, sessionId, extractResearchContent])
+  }, [researchData, researchArtifactId, closeCanvas, addArtifact, sessionId, extractResearchContent, setSelectedArtifactId])
 
   // Toggle Research Agent
   const toggleResearchAgent = useCallback(async () => {
@@ -703,6 +900,19 @@ export function ChatInterface() {
       setIsResearchEnabled(willBeEnabled)
     }
   }, [availableTools, toggleTool, toggleSwarmHook])
+
+  // Handle tool toggle - disable research if a non-research tool is toggled
+  const handleToggleTool = useCallback(async (toolId: string) => {
+    // If research is enabled and we're toggling a non-research tool, disable research
+    if (isResearchEnabled && toolId !== 'agentcore_research-agent') {
+      const researchTool = availableTools.find(tool => tool.id === 'agentcore_research-agent')
+      if (researchTool && researchTool.enabled) {
+        await toggleTool('agentcore_research-agent')
+        setIsResearchEnabled(false)
+      }
+    }
+    await toggleTool(toolId)
+  }, [toggleTool, isResearchEnabled, availableTools])
 
   // Toggle Swarm (using hook from useChat)
   const toggleSwarm = useCallback((enabled?: boolean) => {
@@ -1050,9 +1260,6 @@ If the user asks to modify this document, use the update_artifact tool to find a
             </div>
 
             <div className="flex items-center gap-2">
-              {/* Browser Live View Button */}
-              <BrowserLiveViewButton sessionId={sessionId} browserSession={browserSession} />
-
               {/* Canvas Toggle - Hidden on mobile */}
               {!isMobileView && (
                 <TooltipProvider delayDuration={300}>
@@ -1145,6 +1352,10 @@ If the user asks to modify this document, use the update_artifact tool to find a
                         sessionId={stableSessionId}
                         onBrowserClick={handleBrowserClick}
                         onOpenResearchArtifact={handleOpenResearchArtifact}
+                        onOpenWordArtifact={handleOpenWordArtifact}
+                        onOpenExcelArtifact={handleOpenExcelArtifact}
+                        onOpenPptArtifact={handleOpenPptArtifact}
+                        onOpenExtractedDataArtifact={handleOpenExtractedDataArtifact}
                         researchProgress={researchProgress}
                         hideAvatar={isSwarmFinalResponse || hasHistorySwarm}
                       />
@@ -1217,7 +1428,7 @@ If the user asks to modify this document, use the update_artifact tool to find a
           }}
           onSendMessage={handleSendMessage}
           onStopGeneration={stopGeneration}
-          onToggleTool={toggleTool}
+          onToggleTool={handleToggleTool}
           onToggleSwarm={toggleSwarm}
           onToggleResearch={toggleResearchAgent}
           onConnectVoice={connectVoice}
@@ -1297,6 +1508,13 @@ If the user asks to modify this document, use the update_artifact tool to find a
           onConfirmPlan: handleResearchConfirmPlan,
           onCancel: handleResearchCancel,
           sessionId: sessionId || undefined,
+        } : undefined}
+        browserState={browserArtifactId && browserSession?.sessionId ? {
+          sessionId: browserSession.sessionId,
+          browserId: browserSession.browserId || '',
+          isActive: true,
+          onConnectionError: handleBrowserConnectionError,
+          onValidationFailed: handleBrowserValidationFailed,
         } : undefined}
         sessionId={sessionId || undefined}
       />

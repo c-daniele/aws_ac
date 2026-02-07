@@ -7,7 +7,7 @@ This package contains tools that leverage AWS Bedrock capabilities:
 - Excel Spreadsheets: Create, modify, and manage Excel spreadsheets with persistent storage
 - PowerPoint Presentations: Create, modify, and manage PowerPoint presentations with persistent storage
 
-⚠️  IMPORTANT: When adding a NEW TOOL, you MUST complete ALL 3 steps:
+IMPORTANT: When adding a NEW TOOL, you MUST complete ALL 3 steps:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 1. Add tool import and export in THIS file (__init__.py)
 2. Add tool definition in: chatbot-app/frontend/src/config/tools-config.json
@@ -26,19 +26,21 @@ from .diagram_tool import generate_diagram_and_validate
 from .artifact_editor_tool import update_artifact
 
 # Nova Act browser tools
-from .nova_act_browser_tools import browser_navigate, browser_act, browser_extract, browser_get_page_info, browser_manage_tabs, browser_drag, browser_save_screenshot
+from .nova_act_browser_tools import browser_navigate, browser_act, browser_extract, browser_get_page_info, browser_manage_tabs, browser_save_screenshot
 
 from .word_document_tool import (
     create_word_document,
     modify_word_document,
     list_my_word_documents,
-    read_word_document
+    read_word_document,
+    preview_word_page
 )
 from .excel_spreadsheet_tool import (
     create_excel_spreadsheet,
     modify_excel_spreadsheet,
     list_my_excel_spreadsheets,
-    read_excel_spreadsheet
+    read_excel_spreadsheet,
+    preview_excel_sheets
 )
 from .powerpoint_presentation_tool import (
     list_my_powerpoint_presentations,
@@ -50,7 +52,8 @@ from .powerpoint_presentation_tool import (
     delete_slides,
     move_slide,
     duplicate_slide,
-    update_slide_notes
+    update_slide_notes,
+    preview_presentation_slides
 )
 
 __all__ = [
@@ -61,16 +64,17 @@ __all__ = [
     'browser_extract',
     'browser_get_page_info',
     'browser_manage_tabs',
-    'browser_drag',
     'browser_save_screenshot',
     'create_word_document',
     'modify_word_document',
     'list_my_word_documents',
     'read_word_document',
+    'preview_word_page',
     'create_excel_spreadsheet',
     'modify_excel_spreadsheet',
     'list_my_excel_spreadsheets',
     'read_excel_spreadsheet',
+    'preview_excel_sheets',
     # PowerPoint tools
     'list_my_powerpoint_presentations',
     'get_presentation_layouts',
@@ -81,7 +85,8 @@ __all__ = [
     'delete_slides',
     'move_slide',
     'duplicate_slide',
-    'update_slide_notes'
+    'update_slide_notes',
+    'preview_presentation_slides'
 ]
 
 # Collection of all builtin tools for registry sync
@@ -92,10 +97,12 @@ BUILTIN_TOOLS = [
     modify_word_document,
     list_my_word_documents,
     read_word_document,
+    preview_word_page,
     create_excel_spreadsheet,
     modify_excel_spreadsheet,
     list_my_excel_spreadsheets,
     read_excel_spreadsheet,
+    preview_excel_sheets,
     list_my_powerpoint_presentations,
     get_presentation_layouts,
     analyze_presentation,
@@ -105,7 +112,8 @@ BUILTIN_TOOLS = [
     delete_slides,
     move_slide,
     duplicate_slide,
-    update_slide_notes
+    update_slide_notes,
+    preview_presentation_slides
 ]
 
 # Nova Act browser tools
@@ -115,6 +123,5 @@ BUILTIN_TOOLS.extend([
     browser_extract,
     browser_get_page_info,
     browser_manage_tabs,
-    browser_drag,
     browser_save_screenshot,
 ])

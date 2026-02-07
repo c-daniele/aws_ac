@@ -3,13 +3,23 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { X, FileText, Image as ImageIcon, Code, FileDown, Sparkles, Printer, Clock, Tag, GripHorizontal } from 'lucide-react'
+import { X, FileText, Image as ImageIcon, Code, FileDown, Sparkles, Printer, Clock, Tag, GripHorizontal, Monitor, Database } from 'lucide-react'
 import { Artifact } from '@/types/artifact'
-import { ComposeArtifact } from '@/components/ComposeArtifact'
-import { ResearchArtifact } from '@/components/ResearchArtifact'
+import { ComposeArtifact } from './ComposeArtifact'
+import { ResearchArtifact } from './ResearchArtifact'
+import { BrowserLiveView } from './BrowserLiveView'
+import { OfficeViewer, isOfficeFileUrl, getFilenameFromS3Url } from './OfficeViewer'
 import { marked } from 'marked'
 import { citationPrintCSS } from '@/components/ui/CitationLink'
 import { Markdown } from '@/components/ui/Markdown'
+
+interface BrowserState {
+  sessionId: string
+  browserId: string
+  isActive: boolean
+  onConnectionError: () => void
+  onValidationFailed: () => void
+}
 
 interface CanvasProps {
   isOpen: boolean
@@ -19,6 +29,7 @@ interface CanvasProps {
   onSelectArtifact: (id: string) => void
   composeState?: any // Live composer state
   researchState?: any // Live research state
+  browserState?: BrowserState // Live browser state
   justUpdated?: boolean // Flash effect trigger when artifact is updated
   sessionId?: string
 }
@@ -28,6 +39,9 @@ const getArtifactIcon = (type: string) => {
     case 'markdown':
     case 'research':
     case 'document':
+    case 'word_document':
+    case 'excel_spreadsheet':
+    case 'powerpoint_presentation':
       return <FileText className="h-4 w-4" />
     case 'image':
       return <ImageIcon className="h-4 w-4" />
@@ -35,6 +49,10 @@ const getArtifactIcon = (type: string) => {
       return <Code className="h-4 w-4" />
     case 'compose':
       return <Sparkles className="h-4 w-4" />
+    case 'browser':
+      return <Monitor className="h-4 w-4" />
+    case 'extracted_data':
+      return <Database className="h-4 w-4" />
     default:
       return <Sparkles className="h-4 w-4" />
   }
@@ -59,7 +77,11 @@ const getArtifactTypeLabel = (type: string) => {
     case 'image': return 'Image'
     case 'code': return 'Code'
     case 'document': return 'Document'
+    case 'word_document': return 'Word Document'
+    case 'excel_spreadsheet': return 'Excel Spreadsheet'
+    case 'powerpoint_presentation': return 'PowerPoint'
     case 'browser': return 'Browser'
+    case 'extracted_data': return 'Extracted Data'
     case 'compose': return 'Compose'
     default: return 'Artifact'
   }
@@ -77,22 +99,6 @@ const stripResearchTags = (content: string): string => {
   return content.replace(/<\/?research>/g, '')
 }
 
-// Helper to extract preview text from artifact content
-const getPreviewText = (artifact: Artifact): string => {
-  if (typeof artifact.content === 'string') {
-    // Remove markdown formatting for preview
-    const text = artifact.content
-      .replace(/#{1,6}\s/g, '') // Remove headers
-      .replace(/\*\*(.+?)\*\*/g, '$1') // Remove bold
-      .replace(/\*(.+?)\*/g, '$1') // Remove italic
-      .replace(/\[(.+?)\]\(.+?\)/g, '$1') // Remove links
-      .replace(/\n+/g, ' ') // Replace newlines with space
-      .trim()
-    return text.substring(0, 80) + (text.length > 80 ? '...' : '')
-  }
-  return ''
-}
-
 export function Canvas({
   isOpen,
   onClose,
@@ -101,6 +107,7 @@ export function Canvas({
   onSelectArtifact,
   composeState,
   researchState,
+  browserState,
   justUpdated = false,
   sessionId,
 }: CanvasProps) {
@@ -212,7 +219,7 @@ export function Canvas({
   }
 
   // Resizable bottom panel
-  const [bottomPanelHeight, setBottomPanelHeight] = useState(200) // Initial height: 200px
+  const [bottomPanelHeight, setBottomPanelHeight] = useState(130) // Initial height: 130px
   const [isResizing, setIsResizing] = useState(false)
   const resizeStartY = useRef(0)
   const resizeStartHeight = useRef(0)
@@ -253,12 +260,16 @@ export function Canvas({
     }
   }, [isResizing, handleResizeMove, handleResizeEnd])
 
-  if (!isOpen) return null
+  // Keep Canvas mounted (but hidden) when browser session exists to preserve DCV connection
+  const shouldStayMounted = browserState !== undefined
+
+  if (!isOpen && !shouldStayMounted) return null
 
   return (
     <div
-      className="fixed top-0 right-0 h-screen w-full md:w-[950px] md:max-w-[80vw] bg-sidebar-background border-l border-sidebar-border text-sidebar-foreground flex flex-col z-40 shadow-2xl"
-      style={{ transition: 'transform 0.3s ease-in-out' }}
+      className={`fixed top-0 right-0 h-screen w-full md:w-[950px] md:max-w-[80vw] bg-sidebar-background border-l border-sidebar-border text-sidebar-foreground flex flex-col z-40 shadow-2xl transition-transform duration-300 ${
+        isOpen ? 'translate-x-0' : 'translate-x-full'
+      }`}
     >
       {/* Header */}
       <div className="flex-shrink-0 px-4 py-3 border-b border-sidebar-border/50">
@@ -285,13 +296,22 @@ export function Canvas({
       <div className="flex-1 min-h-0 flex flex-col">
         {/* Preview Area */}
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-          {/* Research state takes priority - no artifact needed */}
-          {researchState ? (
-            <ResearchArtifact {...researchState} />
-          ) : composeState ? (
-            // Compose state - live workflow
-            <ComposeArtifact {...composeState} />
-          ) : selectedArtifact ? (
+          {/* Priority: selectedArtifact first, then live states (research/compose/browser) */}
+          {selectedArtifact ? (
+            // User selected an artifact - show it
+            selectedArtifact.type === 'compose' && composeState ? (
+              // Compose artifact selected - show live compose state
+              <ComposeArtifact {...composeState} />
+            ) : selectedArtifact.type === 'browser' && browserState ? (
+              // Browser artifact selected - show live browser view
+              <BrowserLiveView
+                sessionId={browserState.sessionId}
+                browserId={browserState.browserId}
+                isActive={browserState.isActive}
+                onConnectionError={browserState.onConnectionError}
+                onValidationFailed={browserState.onValidationFailed}
+              />
+            ) : (
             <>
               {/* Preview Header */}
               <div className="px-4 py-3 border-b border-sidebar-border/50">
@@ -313,8 +333,10 @@ export function Canvas({
                       </div>
                     </div>
                   </div>
-                  {/* Action Buttons */}
-                  {(selectedArtifact.type === 'document' || selectedArtifact.type === 'research') && typeof selectedArtifact.content === 'string' && (
+                  {/* Action Buttons - hidden for Office files (they have their own buttons in OfficeViewer) */}
+                  {(selectedArtifact.type === 'document' || selectedArtifact.type === 'research') &&
+                    typeof selectedArtifact.content === 'string' &&
+                    !isOfficeFileUrl(selectedArtifact.content) && (
                     <div className="flex items-center gap-2">
                       <Button
                         variant="ghost"
@@ -342,30 +364,64 @@ export function Canvas({
               </div>
 
               {/* Preview Content */}
-              <ScrollArea className="flex-1">
-                <div className={`p-4 transition-all duration-500 ${justUpdated ? 'bg-green-500/10 ring-2 ring-green-500/30 rounded-lg' : ''}`}>
-                  {(selectedArtifact.type === 'markdown' || selectedArtifact.type === 'research' || selectedArtifact.type === 'document') && typeof selectedArtifact.content === 'string' ? (
-                    <div ref={previewContentRef}>
-                      <Markdown sessionId={sessionId}>
-                        {stripResearchTags(selectedArtifact.content)}
-                      </Markdown>
-                    </div>
-                  ) : selectedArtifact.type === 'image' ? (
-                    <div className="flex items-center justify-center">
-                      <img
-                        src={selectedArtifact.content}
-                        alt={selectedArtifact.title}
-                        className="max-w-full h-auto rounded-lg shadow-lg"
-                      />
-                    </div>
-                  ) : (
-                    <div className="text-label text-sidebar-foreground/60">
-                      Preview not available for this artifact type
-                    </div>
-                  )}
+              {(selectedArtifact.type === 'word_document' || selectedArtifact.type === 'excel_spreadsheet' || selectedArtifact.type === 'powerpoint_presentation' || (selectedArtifact.type === 'document' && typeof selectedArtifact.content === 'string' && isOfficeFileUrl(selectedArtifact.content))) ? (
+                // Office document viewer (Word/Excel/PowerPoint) - full height, no ScrollArea
+                <div className={`flex-1 min-h-0 transition-all duration-500 ${justUpdated ? 'bg-green-500/10 ring-2 ring-green-500/30 rounded-lg' : ''}`}>
+                  <OfficeViewer
+                    s3Url={(selectedArtifact.type === 'word_document' || selectedArtifact.type === 'excel_spreadsheet' || selectedArtifact.type === 'powerpoint_presentation') ? (selectedArtifact.content || selectedArtifact.metadata?.s3_url || '') : selectedArtifact.content}
+                    filename={(selectedArtifact.type === 'word_document' || selectedArtifact.type === 'excel_spreadsheet' || selectedArtifact.type === 'powerpoint_presentation') ? selectedArtifact.title : getFilenameFromS3Url(selectedArtifact.content)}
+                  />
                 </div>
-              </ScrollArea>
+              ) : (
+                <ScrollArea className="flex-1">
+                  <div className={`p-4 transition-all duration-500 ${justUpdated ? 'bg-green-500/10 ring-2 ring-green-500/30 rounded-lg' : ''}`}>
+                    {(selectedArtifact.type === 'markdown' || selectedArtifact.type === 'research' || selectedArtifact.type === 'document') && typeof selectedArtifact.content === 'string' ? (
+                      <div ref={previewContentRef}>
+                        <Markdown sessionId={sessionId}>
+                          {stripResearchTags(selectedArtifact.content)}
+                        </Markdown>
+                      </div>
+                    ) : selectedArtifact.type === 'image' ? (
+                      <div className="flex items-center justify-center">
+                        <img
+                          src={selectedArtifact.content}
+                          alt={selectedArtifact.title}
+                          className="max-w-full h-auto rounded-lg shadow-lg"
+                        />
+                      </div>
+                    ) : selectedArtifact.type === 'extracted_data' ? (
+                      <div className="bg-slate-900 rounded-lg p-4 overflow-auto">
+                        <pre className="text-sm text-slate-100 whitespace-pre-wrap font-mono">
+                          {typeof selectedArtifact.content === 'string'
+                            ? selectedArtifact.content
+                            : JSON.stringify(selectedArtifact.content, null, 2)}
+                        </pre>
+                      </div>
+                    ) : (
+                      <div className="text-label text-sidebar-foreground/60">
+                        Preview not available for this artifact type
+                      </div>
+                    )}
+                  </div>
+                </ScrollArea>
+              )}
             </>
+            )
+          ) : researchState ? (
+            // No artifact selected, show live research state
+            <ResearchArtifact {...researchState} />
+          ) : composeState ? (
+            // No artifact selected, show live compose state
+            <ComposeArtifact {...composeState} />
+          ) : browserState ? (
+            // No artifact selected, show live browser view
+            <BrowserLiveView
+              sessionId={browserState.sessionId}
+              browserId={browserState.browserId}
+              isActive={browserState.isActive}
+              onConnectionError={browserState.onConnectionError}
+              onValidationFailed={browserState.onValidationFailed}
+            />
           ) : (
             <div className="flex-1 flex items-center justify-center text-sidebar-foreground/50">
               <div className="text-center">
@@ -401,42 +457,31 @@ export function Canvas({
                   </div>
                 ) : (
                   displayArtifacts.map((artifact) => {
-                    const preview = getPreviewText(artifact)
                     return (
                       <button
                         key={artifact.id}
                         onClick={() => onSelectArtifact(artifact.id)}
-                        className={`flex-shrink-0 w-72 text-left p-4 rounded-xl border-2 transition-all ${
+                        className={`flex-shrink-0 text-left p-3 rounded-xl border-2 transition-all ${
                           selectedArtifactId === artifact.id
                             ? 'bg-primary/5 border-primary shadow-md ring-1 ring-primary/20'
                             : 'bg-sidebar-background border-sidebar-border hover:border-primary/50 hover:bg-sidebar-accent/30 hover:shadow-sm'
                         }`}
                       >
-                        <div className="flex items-start gap-3 mb-3">
-                          <div className="mt-0.5 flex-shrink-0 p-2 rounded-lg bg-primary/10">
+                        <div className="flex items-center gap-3">
+                          <div className="flex-shrink-0 p-2 rounded-lg bg-primary/10">
                             {getArtifactIcon(artifact.type)}
                           </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="font-semibold text-label truncate mb-1 text-sidebar-foreground">
+                          <div className="min-w-0">
+                            <div className="font-semibold text-label truncate text-sidebar-foreground whitespace-nowrap">
                               {artifact.title}
                             </div>
-                            <div className="flex items-center gap-2 text-caption text-sidebar-foreground/60">
-                              <span className="font-medium">{getArtifactTypeLabel(artifact.type)}</span>
+                            <div className="flex items-center gap-1.5 text-caption text-sidebar-foreground/60 whitespace-nowrap">
+                              <span>{getArtifactTypeLabel(artifact.type)}</span>
                               <span>•</span>
                               <span>{formatTimestamp(artifact.timestamp)}</span>
                             </div>
                           </div>
                         </div>
-                        {preview && (
-                          <p className="text-caption text-sidebar-foreground/60 line-clamp-2 leading-relaxed">
-                            {preview}
-                          </p>
-                        )}
-                        {artifact.description && (
-                          <div className="mt-2 text-caption text-sidebar-foreground/50">
-                            {artifact.description}
-                          </div>
-                        )}
                       </button>
                     )
                   })

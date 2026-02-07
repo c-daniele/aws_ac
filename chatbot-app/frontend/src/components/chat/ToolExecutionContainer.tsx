@@ -2,7 +2,7 @@ import React, { useState, useCallback, useMemo } from 'react'
 import { ChevronRight, Download, ChevronDown, ChevronUp, Sparkles } from 'lucide-react'
 import { ToolExecution } from '@/types/chat'
 import { getToolDisplayName } from '@/utils/chat'
-import { ChartRenderer } from '@/components/ChartRenderer'
+import { ChartRenderer } from '@/components/canvas'
 import { ChartToolResult } from '@/types/chart'
 import { MapRenderer } from '@/components/MapRenderer'
 import { MapToolResult } from '@/types/map'
@@ -12,6 +12,13 @@ import { LazyImage } from '@/components/ui/LazyImage'
 import { getApiUrl } from '@/config/environment'
 import { cn } from '@/lib/utils'
 import type { ImageData } from '@/utils/imageExtractor'
+
+// Word document tool names
+const WORD_DOCUMENT_TOOLS = ['create_word_document', 'modify_word_document']
+// Excel spreadsheet tool names
+const EXCEL_SPREADSHEET_TOOLS = ['create_excel_spreadsheet', 'modify_excel_spreadsheet']
+// PowerPoint presentation tool names
+const POWERPOINT_TOOLS = ['create_presentation', 'update_slide_content', 'add_slide', 'delete_slides', 'move_slide', 'duplicate_slide', 'update_slide_notes']
 
 interface ToolExecutionContainerProps {
   toolExecutions: ToolExecution[]
@@ -23,6 +30,10 @@ interface ToolExecutionContainerProps {
   }>
   sessionId?: string
   onOpenResearchArtifact?: (executionId: string) => void  // Open completed research in Canvas
+  onOpenWordArtifact?: (filename: string) => void  // Open Word document in Canvas
+  onOpenExcelArtifact?: (filename: string) => void  // Open Excel spreadsheet in Canvas
+  onOpenPptArtifact?: (filename: string) => void  // Open PowerPoint presentation in Canvas
+  onOpenExtractedDataArtifact?: (artifactId: string) => void  // Open extracted data in Canvas
 }
 
 // Collapsible Markdown component for tool results
@@ -80,9 +91,59 @@ const CollapsibleMarkdown = React.memo<{
          prevProps.sessionId === nextProps.sessionId
 })
 
-export const ToolExecutionContainer = React.memo<ToolExecutionContainerProps>(({ toolExecutions, compact = false, availableTools = [], sessionId, onOpenResearchArtifact }) => {
+export const ToolExecutionContainer = React.memo<ToolExecutionContainerProps>(({ toolExecutions, compact = false, availableTools = [], sessionId, onOpenResearchArtifact, onOpenWordArtifact, onOpenExcelArtifact, onOpenPptArtifact, onOpenExtractedDataArtifact }) => {
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set())
   const [selectedImage, setSelectedImage] = useState<{ src: string; alt: string } | null>(null)
+
+  // Extract output filename from Word tool result
+  // For modify_word_document: extracts the "Saved as" filename (output)
+  // For create_word_document: extracts the created filename
+  const extractWordFilename = (toolResult: string): string | null => {
+    if (!toolResult) return null
+    // First try to find "Saved as: filename.docx" pattern (for modify_word_document)
+    const savedAsMatch = toolResult.match(/\*\*Saved as\*\*:\s*([a-zA-Z0-9\-]+\.docx)/i)
+    if (savedAsMatch) return savedAsMatch[1]
+    // Fallback: find any .docx filename
+    const match = toolResult.match(/([a-zA-Z0-9\-]+\.docx)/i)
+    return match ? match[1] : null
+  }
+
+  // Extract output filename from Excel tool result
+  // For modify_excel_spreadsheet: extracts the "Saved as" filename (output)
+  // For create_excel_spreadsheet: extracts the created filename
+  const extractExcelFilename = (toolResult: string): string | null => {
+    if (!toolResult) return null
+    // First try to find "Saved as: filename.xlsx" pattern (for modify_excel_spreadsheet)
+    const savedAsMatch = toolResult.match(/\*\*Saved as\*\*:\s*([a-zA-Z0-9\-]+\.xlsx)/i)
+    if (savedAsMatch) return savedAsMatch[1]
+    // Fallback: find any .xlsx filename
+    const match = toolResult.match(/([a-zA-Z0-9\-]+\.xlsx)/i)
+    return match ? match[1] : null
+  }
+
+  // Extract output filename from PowerPoint tool result
+  // For create_presentation: extracts "Filename: xxx.pptx" pattern
+  // For update tools: extracts "Updated: xxx.pptx" pattern
+  const extractPptFilename = (toolResult: string): string | null => {
+    if (!toolResult) return null
+    // Try to find "Updated: filename.pptx" pattern (for update/modify tools)
+    const updatedMatch = toolResult.match(/\*\*Updated\*\*:\s*([a-zA-Z0-9\-]+\.pptx)/i)
+    if (updatedMatch) return updatedMatch[1]
+    // Try to find "Filename: filename.pptx" pattern (for create_presentation)
+    const filenameMatch = toolResult.match(/\*\*Filename\*\*:\s*([a-zA-Z0-9\-]+\.pptx)/i)
+    if (filenameMatch) return filenameMatch[1]
+    // Fallback: find any .pptx filename
+    const match = toolResult.match(/([a-zA-Z0-9\-]+\.pptx)/i)
+    return match ? match[1] : null
+  }
+
+  // Extract artifact ID from browser_extract tool result
+  const extractArtifactId = (toolResult: string): string | null => {
+    if (!toolResult) return null
+    // Look for "Saved as artifact: artifact-id" pattern
+    const match = toolResult.match(/\*\*Saved as artifact\*\*:\s*(extracted-[\w-]+)/)
+    return match ? match[1] : null
+  }
 
   const containsMarkdown = (text: string): boolean => {
     if (typeof text !== 'string') return false
@@ -471,6 +532,86 @@ export const ToolExecutionContainer = React.memo<ToolExecutionContainerProps>(({
                       <span>Canvas</span>
                     </button>
                   )}
+                  {/* View in Canvas button for Word document tools */}
+                  {WORD_DOCUMENT_TOOLS.includes(toolExecution.toolName) &&
+                    toolExecution.isComplete &&
+                    !toolExecution.isCancelled &&
+                    toolExecution.toolResult &&
+                    extractWordFilename(toolExecution.toolResult) &&
+                    onOpenWordArtifact && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const filename = extractWordFilename(toolExecution.toolResult || '');
+                        if (filename) onOpenWordArtifact(filename);
+                      }}
+                      className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-caption font-medium text-primary border border-primary/40 hover:border-primary hover:bg-primary/10 rounded-full transition-colors"
+                      title="View in Canvas"
+                    >
+                      <Sparkles className="h-3.5 w-3.5" />
+                      <span>Canvas</span>
+                    </button>
+                  )}
+                  {/* View in Canvas button for Excel spreadsheet tools */}
+                  {EXCEL_SPREADSHEET_TOOLS.includes(toolExecution.toolName) &&
+                    toolExecution.isComplete &&
+                    !toolExecution.isCancelled &&
+                    toolExecution.toolResult &&
+                    extractExcelFilename(toolExecution.toolResult) &&
+                    onOpenExcelArtifact && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const filename = extractExcelFilename(toolExecution.toolResult || '');
+                        if (filename) onOpenExcelArtifact(filename);
+                      }}
+                      className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-caption font-medium text-primary border border-primary/40 hover:border-primary hover:bg-primary/10 rounded-full transition-colors"
+                      title="View in Canvas"
+                    >
+                      <Sparkles className="h-3.5 w-3.5" />
+                      <span>Canvas</span>
+                    </button>
+                  )}
+                  {/* View in Canvas button for PowerPoint presentation tools */}
+                  {POWERPOINT_TOOLS.includes(toolExecution.toolName) &&
+                    toolExecution.isComplete &&
+                    !toolExecution.isCancelled &&
+                    toolExecution.toolResult &&
+                    extractPptFilename(toolExecution.toolResult) &&
+                    onOpenPptArtifact && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const filename = extractPptFilename(toolExecution.toolResult || '');
+                        if (filename) onOpenPptArtifact(filename);
+                      }}
+                      className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-caption font-medium text-primary border border-primary/40 hover:border-primary hover:bg-primary/10 rounded-full transition-colors"
+                      title="View in Canvas"
+                    >
+                      <Sparkles className="h-3.5 w-3.5" />
+                      <span>Canvas</span>
+                    </button>
+                  )}
+                  {/* View in Canvas button for browser_extract */}
+                  {toolExecution.toolName === 'browser_extract' &&
+                    toolExecution.isComplete &&
+                    !toolExecution.isCancelled &&
+                    toolExecution.toolResult &&
+                    extractArtifactId(toolExecution.toolResult) &&
+                    onOpenExtractedDataArtifact && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const artifactId = extractArtifactId(toolExecution.toolResult || '');
+                        if (artifactId) onOpenExtractedDataArtifact(artifactId);
+                      }}
+                      className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-caption font-medium text-primary border border-primary/40 hover:border-primary hover:bg-primary/10 rounded-full transition-colors"
+                      title="View in Canvas"
+                    >
+                      <Sparkles className="h-3.5 w-3.5" />
+                      <span>Canvas</span>
+                    </button>
+                  )}
                 </div>
 
                 {/* Expanded detail section */}
@@ -510,88 +651,88 @@ export const ToolExecutionContainer = React.memo<ToolExecutionContainerProps>(({
                         )}
                       </div>
                     )}
+
+                    {/* Tool Images - Inside expanded section */}
+                    {toolExecution.images && toolExecution.images.length > 0 && (
+                      <div className="mt-2">
+                        <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-thin scrollbar-thumb-border scrollbar-track-transparent">
+                          {toolExecution.images
+                            .filter((image) => {
+                              const isUrlImage = 'type' in image && image.type === 'url';
+                              const hasValidSource = isUrlImage
+                                ? (image.thumbnail || image.url)
+                                : ('data' in image && image.data);
+                              return !!hasValidSource;
+                            })
+                            .slice(0, 5)
+                            .map((image: ImageData, idx: number) => {
+                              const isUrlImage = 'type' in image && image.type === 'url';
+
+                              let imageSrc: string = '';
+                              if (isUrlImage) {
+                                imageSrc = image.url || image.thumbnail || '';
+                              } else if ('data' in image && 'format' in image) {
+                                const imageData = typeof image.data === 'string'
+                                  ? image.data
+                                  : btoa(String.fromCharCode(...new Uint8Array(image.data as ArrayBuffer)));
+                                imageSrc = `data:image/${image.format};base64,${imageData}`;
+                              }
+
+                              let imageTitle: string = `Tool generated image ${idx + 1}`;
+                              if (isUrlImage && 'title' in image && typeof image.title === 'string') {
+                                imageTitle = image.title;
+                              }
+
+                              let imageFormat: string = 'IMG';
+                              if (isUrlImage) {
+                                imageFormat = 'WEB';
+                              } else if ('format' in image && typeof image.format === 'string') {
+                                imageFormat = image.format.toUpperCase();
+                              }
+
+                              const handleClick = () => {
+                                if (isUrlImage && 'url' in image && image.url) {
+                                  window.open(image.url, '_blank', 'noopener,noreferrer');
+                                } else {
+                                  setSelectedImage({ src: imageSrc, alt: imageTitle });
+                                }
+                              };
+
+                              return (
+                                <div key={idx} className="relative flex-shrink-0 h-[140px]">
+                                  <div
+                                    className="relative h-full rounded-lg overflow-hidden border border-border shadow-sm hover:shadow-lg transition-all duration-200 cursor-pointer bg-gray-50 dark:bg-gray-900"
+                                    onClick={handleClick}
+                                  >
+                                    <LazyImage
+                                      src={imageSrc}
+                                      alt={imageTitle}
+                                      className="h-full w-auto object-cover"
+                                    />
+
+                                    <div className="absolute top-2 right-2">
+                                      <div className="text-[10px] font-medium bg-black/70 text-white backdrop-blur-sm px-1.5 py-0.5 rounded">
+                                        {String(imageFormat)}
+                                      </div>
+                                    </div>
+
+                                    {isUrlImage && 'title' in image && image.title && (
+                                      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-2 pt-6">
+                                        <p className="text-[11px] font-medium text-white line-clamp-2 leading-tight max-w-[200px]">
+                                          {image.title}
+                                        </p>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
-
-              {/* Tool Images */}
-              {toolExecution.images && toolExecution.images.length > 0 && (
-                <div className="mt-3 mb-2">
-                  <div className="space-y-3">
-                    {toolExecution.images
-                      .filter((image) => {
-                        const isUrlImage = 'type' in image && image.type === 'url';
-                        const hasValidSource = isUrlImage
-                          ? (image.thumbnail || image.url)
-                          : ('data' in image && image.data);
-                        return !!hasValidSource;
-                      })
-                      .slice(0, 3)
-                      .map((image: ImageData, idx: number) => {
-                        const isUrlImage = 'type' in image && image.type === 'url';
-
-                        let imageSrc: string = '';
-                        if (isUrlImage) {
-                          imageSrc = image.url || image.thumbnail || '';
-                        } else if ('data' in image && 'format' in image) {
-                          const imageData = typeof image.data === 'string'
-                            ? image.data
-                            : btoa(String.fromCharCode(...new Uint8Array(image.data as ArrayBuffer)));
-                          imageSrc = `data:image/${image.format};base64,${imageData}`;
-                        }
-
-                        let imageTitle: string = `Tool generated image ${idx + 1}`;
-                        if (isUrlImage && 'title' in image && typeof image.title === 'string') {
-                          imageTitle = image.title;
-                        }
-
-                        let imageFormat: string = 'IMG';
-                        if (isUrlImage) {
-                          imageFormat = 'WEB';
-                        } else if ('format' in image && typeof image.format === 'string') {
-                          imageFormat = image.format.toUpperCase();
-                        }
-
-                        const handleClick = () => {
-                          if (isUrlImage && 'url' in image && image.url) {
-                            window.open(image.url, '_blank', 'noopener,noreferrer');
-                          } else {
-                            setSelectedImage({ src: imageSrc, alt: imageTitle });
-                          }
-                        };
-
-                        return (
-                          <div key={idx} className="relative w-full">
-                            <div
-                              className="relative rounded-xl overflow-hidden border border-border shadow-md hover:shadow-xl transition-all duration-200 cursor-pointer bg-gray-50 dark:bg-gray-900"
-                              onClick={handleClick}
-                            >
-                              <LazyImage
-                                src={imageSrc}
-                                alt={imageTitle}
-                                className="w-full h-auto object-contain"
-                              />
-
-                              <div className="absolute top-3 right-3">
-                                <div className="text-caption font-semibold bg-black/80 text-white border-0 backdrop-blur-sm px-2.5 py-1 rounded inline-block">
-                                  {String(imageFormat)}
-                                </div>
-                              </div>
-
-                              {isUrlImage && 'title' in image && image.title && (
-                                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 via-black/60 to-transparent p-4 pt-8">
-                                  <p className="text-label font-medium text-white line-clamp-2 leading-tight">
-                                    {image.title}
-                                  </p>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                  </div>
-                </div>
-              )}
             </React.Fragment>
           )
         })}
@@ -600,22 +741,21 @@ export const ToolExecutionContainer = React.memo<ToolExecutionContainerProps>(({
       {/* Image Modal */}
       {selectedImage && (
         <div
-          className="fixed inset-0 bg-black/90 flex items-center justify-center z-50"
+          className="fixed inset-0 bg-black/80 flex items-center justify-center z-[9999] p-8"
           onClick={() => setSelectedImage(null)}
         >
-          <div className="relative" style={{ maxWidth: '90vw', maxHeight: '90vh' }}>
+          <div className="relative max-w-[80vw] max-h-[80vh]">
             <img
               src={selectedImage.src}
               alt={selectedImage.alt}
-              className="object-contain cursor-zoom-out rounded-lg"
-              style={{ maxWidth: 'min(90vw, 150%)', maxHeight: '85vh' }}
+              className="max-w-full max-h-[80vh] object-contain rounded-lg cursor-zoom-out"
               onClick={(e) => e.stopPropagation()}
             />
             <button
               onClick={() => setSelectedImage(null)}
-              className="absolute -top-3 -right-3 bg-white/90 hover:bg-white text-gray-800 rounded-full p-1.5 shadow-lg transition-colors"
+              className="absolute top-2 right-2 bg-black/60 hover:bg-black/80 text-white rounded-full p-2 transition-colors"
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>

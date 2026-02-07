@@ -134,7 +134,8 @@ async def invocations(request: InvocationRequest, http_request: Request):
             temperature=input_data.temperature,
             system_prompt=input_data.system_prompt,
             caching_enabled=input_data.caching_enabled,
-            compaction_enabled=input_data.compaction_enabled
+            compaction_enabled=input_data.compaction_enabled,
+            api_keys=input_data.api_keys
         )
 
         # Stream response from agent
@@ -142,6 +143,7 @@ async def invocations(request: InvocationRequest, http_request: Request):
             message_content,
             files=input_data.files,
             selected_artifact_id=input_data.selected_artifact_id,
+            api_keys=input_data.api_keys,
             **special_params
         )
 
@@ -198,7 +200,7 @@ def _parse_message(message: str, request_type: str) -> tuple[str, dict]:
                 first_item = parsed[0]
                 if isinstance(first_item, dict) and "interruptResponse" in first_item:
                     interrupt_data = first_item["interruptResponse"]
-                    logger.info(f"🔔 Interrupt response: {interrupt_data}")
+                    logger.debug(f"Interrupt response received: {interrupt_data.get('interruptId', 'unknown')[:50]}")
                     # Return interrupt prompt as-is (agent expects this format)
                     return [first_item], {}
         except (json.JSONDecodeError, TypeError, KeyError):

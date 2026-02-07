@@ -8,6 +8,16 @@ import { A2A_TOOLS_REQUIRING_POLLING, isA2ATool, getAgentStatusForTool } from '.
 import { fetchAuthSession } from 'aws-amplify/auth'
 import { updateLastActivity } from '@/config/session'
 import { TOOL_TO_DOC_TYPE, DOC_TYPE_TO_TOOL_TYPE, DocumentType } from '@/config/document-tools'
+import { ExtractedDataInfo } from './useCanvasHandlers'
+
+// Word document info from workspace API
+export interface WorkspaceDocument {
+  filename: string
+  size_kb: string
+  last_modified: string
+  s3_key: string
+  tool_type: string
+}
 
 interface UseStreamEventsProps {
   sessionState: ChatSessionState
@@ -18,6 +28,7 @@ interface UseStreamEventsProps {
   currentToolExecutionsRef: React.MutableRefObject<ToolExecution[]>
   currentTurnIdRef: React.MutableRefObject<string | null>
   startPollingRef: React.MutableRefObject<((sessionId: string) => void) | null>
+  stopPollingRef: React.MutableRefObject<(() => void) | null>
   sessionId: string | null
   availableTools?: Array<{
     id: string
@@ -25,6 +36,11 @@ interface UseStreamEventsProps {
     tool_type?: string
   }>
   onArtifactUpdated?: () => void  // Callback when artifact is updated via update_artifact tool
+  onWordDocumentsCreated?: (documents: WorkspaceDocument[]) => void  // Callback when Word documents are created
+  onExcelDocumentsCreated?: (documents: WorkspaceDocument[]) => void  // Callback when Excel documents are created
+  onPptDocumentsCreated?: (documents: WorkspaceDocument[]) => void  // Callback when PowerPoint documents are created
+  onBrowserSessionDetected?: (browserSessionId: string, browserId: string) => void  // Callback when browser session is first detected
+  onExtractedDataCreated?: (data: ExtractedDataInfo) => void  // Callback when browser_extract creates artifact
 }
 
 export const useStreamEvents = ({
@@ -36,9 +52,15 @@ export const useStreamEvents = ({
   currentToolExecutionsRef,
   currentTurnIdRef,
   startPollingRef,
+  stopPollingRef,
   sessionId,
   availableTools = [],
-  onArtifactUpdated
+  onArtifactUpdated,
+  onWordDocumentsCreated,
+  onExcelDocumentsCreated,
+  onPptDocumentsCreated,
+  onBrowserSessionDetected,
+  onExtractedDataCreated
 }: UseStreamEventsProps) => {
   // Refs to track streaming state synchronously (avoid React batching issues)
   const streamingStartedRef = useRef(false)
@@ -407,10 +429,32 @@ export const useStreamEvents = ({
         onArtifactUpdated()
       }
 
+      // If browser_extract tool completed successfully with artifact, open Canvas
+      if (toolName === 'browser_extract' && !isCancelled && data.metadata?.artifactId && onExtractedDataCreated) {
+        console.log('[useStreamEvents] browser_extract completed, creating artifact:', data.metadata.artifactId)
+        // Parse extracted data from tool result
+        const extractedDataMatch = data.result?.match(/\*\*Extracted Data\*\*:\s*```json\n([\s\S]*?)```/)
+        const extractedContent = extractedDataMatch ? extractedDataMatch[1].trim() : '{}'
+        const descriptionMatch = data.result?.match(/\*\*Description\*\*:\s*(.+)/)
+        const title = descriptionMatch ? descriptionMatch[1].substring(0, 50) : 'Extracted Data'
+
+        onExtractedDataCreated({
+          artifactId: data.metadata.artifactId,
+          title,
+          content: extractedContent,
+          sourceUrl: data.metadata.source_url || '',
+          sourceTitle: data.metadata.source_title || ''
+        })
+      }
+
       // Update tool execution with result
+      // Filter out images if hideImageInChat metadata is set
+      const shouldHideImages = data.metadata?.hideImageInChat === true
+      const toolImages = shouldHideImages ? [] : data.images
+
       const updatedExecutions = currentToolExecutionsRef.current.map(tool =>
         tool.id === data.toolUseId
-          ? { ...tool, toolResult: data.result, images: data.images, isComplete: true, isCancelled }
+          ? { ...tool, toolResult: data.result, images: toolImages, isComplete: true, isCancelled }
           : tool
       )
 
@@ -426,6 +470,11 @@ export const useStreamEvents = ({
         }
 
         browserSessionUpdate.browserSession = browserSession
+
+        // Notify parent about browser session detection (for Canvas integration)
+        if (onBrowserSessionDetected) {
+          onBrowserSessionDetected(browserSession.sessionId, browserSession.browserId || '')
+        }
 
         // Save to sessionStorage and DynamoDB (only on first set)
         const currentSessionId = sessionStorage.getItem('chat-session-id')
@@ -469,7 +518,7 @@ export const useStreamEvents = ({
         if (msg.isToolMessage && msg.toolExecutions) {
           const updatedToolExecutions = msg.toolExecutions.map(tool =>
             tool.id === data.toolUseId
-              ? { ...tool, toolResult: data.result, images: data.images, isComplete: true }
+              ? { ...tool, toolResult: data.result, images: toolImages, isComplete: true }
               : tool
           )
           return {
@@ -572,6 +621,82 @@ export const useStreamEvents = ({
               // No auth session available - continue without auth header
             }
 
+            // Extract output filenames from Word tool results (only newly created/modified files)
+            const wordOutputFilenames = new Set<string>()
+            for (const toolExec of currentToolExecutionsRef.current) {
+              if (toolExec.toolName === 'create_word_document' || toolExec.toolName === 'modify_word_document') {
+                if (toolExec.toolResult) {
+                  // For create: look for "filename.docx" pattern
+                  // For modify: look for "Saved as: filename.docx" pattern (output file)
+                  const savedAsMatch = toolExec.toolResult.match(/\*\*Saved as\*\*:\s*([a-zA-Z0-9\-]+\.docx)/i)
+                  if (savedAsMatch) {
+                    wordOutputFilenames.add(savedAsMatch[1])
+                  } else {
+                    // Fallback: find any .docx filename
+                    const filenameMatch = toolExec.toolResult.match(/([a-zA-Z0-9\-]+\.docx)/i)
+                    if (filenameMatch) {
+                      wordOutputFilenames.add(filenameMatch[1])
+                    }
+                  }
+                }
+              }
+            }
+
+            // Extract output filenames from Excel tool results (only newly created/modified files)
+            const excelOutputFilenames = new Set<string>()
+            for (const toolExec of currentToolExecutionsRef.current) {
+              if (toolExec.toolName === 'create_excel_spreadsheet' || toolExec.toolName === 'modify_excel_spreadsheet') {
+                if (toolExec.toolResult) {
+                  // For create: look for "filename.xlsx" pattern
+                  // For modify: look for "Saved as: filename.xlsx" pattern (output file)
+                  const savedAsMatch = toolExec.toolResult.match(/\*\*Saved as\*\*:\s*([a-zA-Z0-9\-]+\.xlsx)/i)
+                  if (savedAsMatch) {
+                    excelOutputFilenames.add(savedAsMatch[1])
+                  } else {
+                    // Fallback: find any .xlsx filename
+                    const filenameMatch = toolExec.toolResult.match(/([a-zA-Z0-9\-]+\.xlsx)/i)
+                    if (filenameMatch) {
+                      excelOutputFilenames.add(filenameMatch[1])
+                    }
+                  }
+                }
+              }
+            }
+
+            // Extract output filenames from PowerPoint tool results (only newly created/modified files)
+            const pptOutputFilenames = new Set<string>()
+            const PPT_TOOLS = ['create_presentation', 'update_slide_content', 'add_slide', 'delete_slides', 'move_slide', 'duplicate_slide', 'update_slide_notes']
+            for (const toolExec of currentToolExecutionsRef.current) {
+              if (PPT_TOOLS.includes(toolExec.toolName)) {
+                if (toolExec.toolResult) {
+                  // For update tools: look for "Updated: filename.pptx" pattern
+                  const updatedMatch = toolExec.toolResult.match(/\*\*Updated\*\*:\s*([a-zA-Z0-9\-]+\.pptx)/i)
+                  if (updatedMatch) {
+                    pptOutputFilenames.add(updatedMatch[1])
+                  } else {
+                    // For create: look for "Filename: filename.pptx" pattern
+                    const filenameMatch = toolExec.toolResult.match(/\*\*Filename\*\*:\s*([a-zA-Z0-9\-]+\.pptx)/i)
+                    if (filenameMatch) {
+                      pptOutputFilenames.add(filenameMatch[1])
+                    } else {
+                      // Fallback: find any .pptx filename
+                      const pptxMatch = toolExec.toolResult.match(/([a-zA-Z0-9\-]+\.pptx)/i)
+                      if (pptxMatch) {
+                        pptOutputFilenames.add(pptxMatch[1])
+                      }
+                    }
+                  }
+                }
+              }
+            }
+
+            // Track Word documents separately for artifact creation
+            let wordDocumentsForArtifact: WorkspaceDocument[] = []
+            // Track Excel documents separately for artifact creation
+            let excelDocumentsForArtifact: WorkspaceDocument[] = []
+            // Track PowerPoint documents separately for artifact creation
+            let pptDocumentsForArtifact: WorkspaceDocument[] = []
+
             const fetchPromises = Array.from(usedDocTypes).map(async (docType) => {
               const response = await fetch(`/api/workspace/files?docType=${docType}`, {
                 headers: workspaceHeaders
@@ -579,10 +704,36 @@ export const useStreamEvents = ({
               if (response.ok) {
                 const data = await response.json()
                 if (data.files && Array.isArray(data.files)) {
-                  return data.files.map((file: any) => ({
+                  const files = data.files.map((file: any) => ({
                     filename: file.filename,
+                    size_kb: file.size_kb,
+                    last_modified: file.last_modified,
+                    s3_key: file.s3_key,
                     tool_type: DOC_TYPE_TO_TOOL_TYPE[docType] || file.tool_type
                   }))
+
+                  // Collect only newly created/modified Word documents for artifact creation
+                  if (docType === 'word' && wordOutputFilenames.size > 0) {
+                    wordDocumentsForArtifact = files.filter((f: WorkspaceDocument) =>
+                      wordOutputFilenames.has(f.filename)
+                    )
+                  }
+
+                  // Collect only newly created/modified Excel documents for artifact creation
+                  if (docType === 'excel' && excelOutputFilenames.size > 0) {
+                    excelDocumentsForArtifact = files.filter((f: WorkspaceDocument) =>
+                      excelOutputFilenames.has(f.filename)
+                    )
+                  }
+
+                  // Collect only newly created/modified PowerPoint documents for artifact creation
+                  if (docType === 'powerpoint' && pptOutputFilenames.size > 0) {
+                    pptDocumentsForArtifact = files.filter((f: WorkspaceDocument) =>
+                      pptOutputFilenames.has(f.filename)
+                    )
+                  }
+
+                  return files
                 }
               }
               return []
@@ -590,6 +741,21 @@ export const useStreamEvents = ({
 
             const results = await Promise.all(fetchPromises)
             workspaceDocuments = results.flat()
+
+            // Trigger Word document artifact creation callback (only for output files)
+            if (wordDocumentsForArtifact.length > 0 && onWordDocumentsCreated) {
+              onWordDocumentsCreated(wordDocumentsForArtifact)
+            }
+
+            // Trigger Excel document artifact creation callback (only for output files)
+            if (excelDocumentsForArtifact.length > 0 && onExcelDocumentsCreated) {
+              onExcelDocumentsCreated(excelDocumentsForArtifact)
+            }
+
+            // Trigger PowerPoint document artifact creation callback (only for output files)
+            if (pptDocumentsForArtifact.length > 0 && onPptDocumentsCreated) {
+              onPptDocumentsCreated(pptDocumentsForArtifact)
+            }
           } catch (error) {
             // Failed to fetch workspace files - non-critical, will use backend-provided documents
           }
@@ -745,6 +911,10 @@ export const useStreamEvents = ({
 
   const handleInterruptEvent = useCallback((data: StreamEvent) => {
     if (data.type === 'interrupt') {
+      if (stopPollingRef.current) {
+        stopPollingRef.current()
+      }
+
       setSessionState(prev => ({
         ...prev,
         interrupt: {
@@ -759,7 +929,7 @@ export const useStreamEvents = ({
         agentStatus: 'idle'
       }))
     }
-  }, [setSessionState, setUIState])
+  }, [setSessionState, setUIState, stopPollingRef])
 
   const handleBrowserProgressEvent = useCallback((event: StreamEvent) => {
     if (event.type === 'browser_progress') {
@@ -1181,6 +1351,11 @@ export const useStreamEvents = ({
               browserId: metadata.browserId || null
             }
 
+            // Notify parent about browser session detection (for Canvas integration)
+            if (onBrowserSessionDetected && browserSession.sessionId) {
+              onBrowserSessionDetected(browserSession.sessionId, browserSession.browserId || '')
+            }
+
             // Save to sessionStorage (only on first set)
             const currentSessionId = sessionStorage.getItem('chat-session-id')
             if (currentSessionId) {
@@ -1211,7 +1386,8 @@ export const useStreamEvents = ({
     handleSwarmNodeStopEvent,
     handleSwarmHandoffEvent,
     handleSwarmCompleteEvent,
-    setSessionState
+    setSessionState,
+    onBrowserSessionDetected
   ])
 
   // Reset streaming state (called when user stops generation)

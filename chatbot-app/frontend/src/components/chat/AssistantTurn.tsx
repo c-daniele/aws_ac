@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Clock, Zap, Coins, Copy, ThumbsUp, ThumbsDown, Check, FileText, Download, FileSpreadsheet, Presentation, AudioWaveform, Sparkles } from 'lucide-react'
+import { Copy, ThumbsUp, ThumbsDown, Check, FileText, Download, FileSpreadsheet, Presentation, AudioWaveform, Sparkles } from 'lucide-react'
 import { AIIcon } from '@/components/ui/AIIcon'
 import { Message } from '@/types/chat'
 import { ReasoningState } from '@/types/events'
@@ -57,6 +57,10 @@ interface AssistantTurnProps {
   sessionId?: string
   onBrowserClick?: (executionId: string) => void
   onOpenResearchArtifact?: (executionId: string) => void
+  onOpenWordArtifact?: (filename: string) => void
+  onOpenExcelArtifact?: (filename: string) => void
+  onOpenPptArtifact?: (filename: string) => void
+  onOpenExtractedDataArtifact?: (artifactId: string) => void
   researchProgress?: {
     stepNumber: number
     content: string
@@ -64,7 +68,7 @@ interface AssistantTurnProps {
   hideAvatar?: boolean
 }
 
-export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, currentReasoning, availableTools = [], sessionId, onBrowserClick, onOpenResearchArtifact, researchProgress, hideAvatar = false }) => {
+export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, currentReasoning, availableTools = [], sessionId, onBrowserClick, onOpenResearchArtifact, onOpenWordArtifact, onOpenExcelArtifact, onOpenPptArtifact, onOpenExtractedDataArtifact, researchProgress, hideAvatar = false }) => {
   // Get initial feedback state from first message
   const initialFeedback = messages[0]?.feedback || null
 
@@ -336,11 +340,18 @@ export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, current
   const tokenUsage = sortedMessages.find(msg => msg.tokenUsage)?.tokenUsage
 
   // Collect all documents from the turn (for rendering at the bottom)
+  // Word, Excel, and PowerPoint documents are excluded - they are shown in Canvas via tool execution button
   const turnDocuments = useMemo(() => {
     const docs: Array<{ filename: string; tool_type: string }> = []
     sortedMessages.forEach(msg => {
       if (msg.documents && msg.documents.length > 0) {
-        docs.push(...msg.documents)
+        // Filter out Word, Excel, and PowerPoint documents - they're handled in Canvas
+        const canvasDocExts = ['docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt']
+        const nonCanvasDocs = msg.documents.filter(doc => {
+          const ext = doc.filename.toLowerCase().split('.').pop()
+          return !canvasDocExts.includes(ext || '')
+        })
+        docs.push(...nonCanvasDocs)
       }
     })
     return docs
@@ -453,6 +464,10 @@ export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, current
                       availableTools={availableTools}
                       sessionId={sessionId}
                       onOpenResearchArtifact={onOpenResearchArtifact}
+                      onOpenWordArtifact={onOpenWordArtifact}
+                      onOpenExcelArtifact={onOpenExcelArtifact}
+                      onOpenPptArtifact={onOpenPptArtifact}
+                      onOpenExtractedDataArtifact={onOpenExtractedDataArtifact}
                     />
                   )}
                 </div>
@@ -567,39 +582,16 @@ export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, current
             </div>
           )}
 
-          {/* Metrics Badges - Shows on hover at bottom right */}
+          {/* Metrics - Minimal text on hover (hidden on mobile) */}
           {((latencyMetrics && (latencyMetrics.timeToFirstToken || latencyMetrics.endToEndLatency)) || tokenUsage) && (
-            <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 -mt-2">
-              {/* Latency Metrics */}
-              {latencyMetrics?.timeToFirstToken && (
-                <Badge variant="secondary" className="text-caption bg-blue-100 text-blue-700 border-blue-200 flex items-center gap-1">
-                  <Zap className="h-3 w-3" />
-                  TTFT: {latencyMetrics.timeToFirstToken}ms
-                </Badge>
-              )}
-              {latencyMetrics?.endToEndLatency && (
-                <Badge variant="secondary" className="text-caption bg-green-100 text-green-700 border-green-200 flex items-center gap-1">
-                  <Clock className="h-3 w-3" />
-                  E2E: {latencyMetrics.endToEndLatency}ms
-                </Badge>
-              )}
-
-              {/* Token Usage Metrics */}
-              {tokenUsage && (
-                <Badge variant="secondary" className="text-caption bg-purple-100 text-purple-700 border-purple-200 flex items-center gap-1">
-                  <Coins className="h-3 w-3" />
-                  Token: {tokenUsage.inputTokens.toLocaleString()} in / {tokenUsage.outputTokens.toLocaleString()} out
-                  {((tokenUsage.cacheReadInputTokens && tokenUsage.cacheReadInputTokens > 0) ||
-                    (tokenUsage.cacheWriteInputTokens && tokenUsage.cacheWriteInputTokens > 0)) && (
-                    <span className="ml-1 text-purple-600">
-                      ({[
-                        tokenUsage.cacheReadInputTokens && tokenUsage.cacheReadInputTokens > 0 && `${tokenUsage.cacheReadInputTokens.toLocaleString()} hit`,
-                        tokenUsage.cacheWriteInputTokens && tokenUsage.cacheWriteInputTokens > 0 && `${tokenUsage.cacheWriteInputTokens.toLocaleString()} write`
-                      ].filter(Boolean).join(', ')})
-                    </span>
-                  )}
-                </Badge>
-              )}
+            <div className="hidden md:flex justify-end opacity-0 group-hover:opacity-100 transition-opacity duration-200 -mt-1">
+              <span className="text-[11px] text-muted-foreground/70">
+                {[
+                  latencyMetrics?.timeToFirstToken && `TTFT ${latencyMetrics.timeToFirstToken}ms`,
+                  latencyMetrics?.endToEndLatency && `E2E ${(latencyMetrics.endToEndLatency / 1000).toFixed(1)}s`,
+                  tokenUsage && `${(tokenUsage.inputTokens / 1000).toFixed(1)}k in · ${tokenUsage.outputTokens} out`,
+                ].filter(Boolean).join(' · ')}
+              </span>
             </div>
           )}
 
@@ -706,7 +698,11 @@ export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, current
 
   const reasoningEqual = prevProps.currentReasoning?.text === nextProps.currentReasoning?.text
   const callbackEqual = prevProps.onBrowserClick === nextProps.onBrowserClick &&
-    prevProps.onOpenResearchArtifact === nextProps.onOpenResearchArtifact
+    prevProps.onOpenResearchArtifact === nextProps.onOpenResearchArtifact &&
+    prevProps.onOpenWordArtifact === nextProps.onOpenWordArtifact &&
+    prevProps.onOpenExcelArtifact === nextProps.onOpenExcelArtifact &&
+    prevProps.onOpenPptArtifact === nextProps.onOpenPptArtifact &&
+    prevProps.onOpenExtractedDataArtifact === nextProps.onOpenExtractedDataArtifact
 
   // Compare researchProgress for real-time status updates
   const researchProgressEqual = prevProps.researchProgress?.stepNumber === nextProps.researchProgress?.stepNumber &&
