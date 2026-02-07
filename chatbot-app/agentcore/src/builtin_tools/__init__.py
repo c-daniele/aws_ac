@@ -6,6 +6,7 @@ This package contains tools that leverage AWS Bedrock capabilities:
 - Word Documents: Create, modify, and manage Word documents with persistent storage
 - Excel Spreadsheets: Create, modify, and manage Excel spreadsheets with persistent storage
 - PowerPoint Presentations: Create, modify, and manage PowerPoint presentations with persistent storage
+- Knowledge Base: Create, manage, and query document catalogs with RAG capabilities
 
 IMPORTANT: When adding a NEW TOOL, you MUST complete ALL 3 steps:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -54,7 +55,21 @@ from .powerpoint_presentation_tool import (
     move_slide,
     duplicate_slide,
     update_slide_notes,
-    preview_presentation_slides
+    preview_presentation_slides,
+)
+
+# Knowledge Base tools
+from .knowledge_base_tools import (
+    create_catalog,
+    list_catalogs,
+    upload_to_catalog,
+    list_catalog_documents,
+    select_catalog,
+    query_catalog,
+    get_indexing_status,
+    delete_catalog_document,
+    download_from_catalog,
+    delete_catalog,
 )
 
 __all__ = [
@@ -88,7 +103,19 @@ __all__ = [
     'move_slide',
     'duplicate_slide',
     'update_slide_notes',
-    'preview_presentation_slides'
+    'preview_presentation_slides',
+    # Knowledge Base tools
+    'create_catalog',
+    'list_catalogs',
+    'upload_to_catalog',
+    'list_catalog_documents',
+    'select_catalog',
+    'query_catalog',
+    'get_indexing_status',
+    'delete_catalog_document',
+    'download_from_catalog',
+    'delete_catalog'
+]
 ]
 
 # Collection of all builtin tools for registry sync
@@ -128,3 +155,20 @@ BUILTIN_TOOLS.extend([
     browser_manage_tabs,
     browser_save_screenshot,
 ])
+
+
+# Knowledge Base tools
+BUILTIN_TOOLS.extend(
+    [
+        create_catalog,
+        list_catalogs,
+        upload_to_catalog,
+        list_catalog_documents,
+        select_catalog,
+        query_catalog,
+        get_indexing_status,
+        delete_catalog_document,
+        download_from_catalog,
+        delete_catalog,
+    ]
+)

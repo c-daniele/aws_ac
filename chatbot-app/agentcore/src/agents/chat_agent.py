@@ -601,6 +601,49 @@ class ChatAgent(BaseAgent):
         # Track files that will use workspace tools (not sent as ContentBlock)
         workspace_only_files = []
 
+        # Check if knowledge_base_tools is enabled (for catalog uploads)
+        # enabled_tools can contain either group IDs or individual tool IDs
+        KB_TOOL_IDS = {
+            "knowledge_base_tools",  # Group ID
+            "upload_to_catalog",  # Individual tool ID
+            "create_catalog",
+            "list_catalogs",
+            "list_catalog_documents",
+            "select_catalog",
+            "query_catalog",
+            "get_indexing_status",
+            "delete_catalog_document",
+            "download_from_catalog",
+            "delete_catalog",
+        }
+
+        # Debug: Log enabled_tools for KB detection
+        logger.info(f"[_build_prompt] enabled_tools={self.enabled_tools}")
+
+        kb_tools_enabled = bool(
+            self.enabled_tools and KB_TOOL_IDS.intersection(self.enabled_tools)
+        )
+
+        # Debug: Log KB detection result
+        if self.enabled_tools:
+            matched_kb_tools = KB_TOOL_IDS.intersection(self.enabled_tools)
+            logger.info(
+                f"[_build_prompt] KB tool intersection: {matched_kb_tools}, kb_tools_enabled={kb_tools_enabled}"
+            )
+        else:
+            logger.info(
+                f"[_build_prompt] enabled_tools is None/empty, kb_tools_enabled={kb_tools_enabled}"
+            )
+
+        if kb_tools_enabled:
+            logger.info(
+                f"[KB Mode] Knowledge base tools detected - will NOT send KB-compatible files as ContentBlocks"
+            )
+
+        # KB-supported file extensions (these should not be sent as ContentBlocks when KB tools are enabled)
+        # because upload_to_catalog retrieves content from invocation_state
+        KB_SUPPORTED_EXTENSIONS = (".pdf", ".docx", ".txt", ".md", ".csv")
+
         # Add each file as appropriate ContentBlock
         for file in files:
             content_type = file.content_type.lower()
@@ -645,6 +688,18 @@ class ChatAgent(BaseAgent):
                 workspace_only_files.append(sanitized_full_name)
                 logger.debug(f"PowerPoint presentation uploaded: {sanitized_full_name} (will be stored in workspace)")
 
+            elif filename.endswith(KB_SUPPORTED_EXTENSIONS) and kb_tools_enabled:
+                # KB-supported files when knowledge_base_tools is enabled:
+                # Do NOT send as ContentBlock - the upload_to_catalog tool will retrieve
+                # file content from invocation_state['uploaded_files']
+                # This prevents context window overflow for large documents
+                workspace_only_files.append(sanitized_full_name)
+                file_size_kb = len(file_bytes) / 1024
+                logger.info(
+                    f"[KB Mode] {sanitized_full_name} ({file_size_kb:.1f} KB) available for catalog upload - "
+                    f"NOT sent as ContentBlock to prevent context overflow"
+                )
+
             elif filename.endswith((".docx", ".xlsx")):
                 # Word/Excel documents - use workspace in cloud mode
                 if is_cloud_mode:
@@ -668,6 +723,8 @@ class ChatAgent(BaseAgent):
 
             elif filename.endswith((".pdf", ".csv", ".doc", ".xls", ".html", ".txt", ".md")):
                 # Other documents - send as ContentBlock
+                # NOTE: For large files, this can cause context overflow!
+                # If KB tools are enabled, these file types would be caught earlier
                 doc_format = self._get_document_format(filename)
                 name_without_ext = sanitized_full_name.rsplit('.', 1)[0] if '.' in sanitized_full_name else sanitized_full_name
 
@@ -680,7 +737,11 @@ class ChatAgent(BaseAgent):
                         }
                     }
                 })
-                logger.debug(f"Added document: {file.filename} -> {sanitized_full_name} (format: {doc_format})")
+                file_size_kb = len(file_bytes) / 1024
+                logger.info(
+                    f"[File Processing] Added {filename} ({file_size_kb:.1f} KB) as ContentBlock - "
+                    f"WARNING: KB tools not enabled, large files may cause context overflow"
+                )
 
             else:
                 logger.warning(f"Unsupported file type: {filename} ({content_type})")
@@ -691,6 +752,18 @@ class ChatAgent(BaseAgent):
             pptx_files = [fn for fn in sanitized_filenames if fn.endswith('.pptx')]
             docx_files = [fn for fn in workspace_only_files if fn.endswith('.docx')]
             xlsx_files = [fn for fn in workspace_only_files if fn.endswith('.xlsx')]
+
+            # KB-compatible files (for catalog upload)
+            kb_files = (
+                [
+                    fn
+                    for fn in workspace_only_files
+                    if fn.endswith(KB_SUPPORTED_EXTENSIONS) and fn not in docx_files
+                ]
+                if kb_tools_enabled
+                else []
+            )
+
             attached_files = [fn for fn in sanitized_filenames if fn not in workspace_only_files]
 
             file_hints_lines = []
@@ -699,6 +772,16 @@ class ChatAgent(BaseAgent):
             if attached_files:
                 file_hints_lines.append("Attached files:")
                 file_hints_lines.extend([f"- {fn}" for fn in attached_files])
+
+            # Add KB-compatible files with catalog upload hints
+            if kb_files:
+                if file_hints_lines:
+                    file_hints_lines.append("")
+                file_hints_lines.append("Files available for catalog upload:")
+                for fn in kb_files:
+                    file_hints_lines.append(
+                        f"- {fn} (use upload_to_catalog(catalog_id, filename='{fn}') to add to a catalog)"
+                    )
 
             # Add workspace-only files with tool hints
             if docx_files:
