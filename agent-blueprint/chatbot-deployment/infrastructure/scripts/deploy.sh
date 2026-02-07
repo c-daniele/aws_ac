@@ -18,6 +18,7 @@ if [ -f "$ENV_FILE" ]; then
     echo "  - ENABLE_COGNITO: ${ENABLE_COGNITO:-true}"
     echo "  - CORS_ORIGINS: ${CORS_ORIGINS:-not set}"
     echo "  - ALLOWED_IP_RANGES: ${ALLOWED_IP_RANGES:-not set}"
+    echo "  - PROJECT_NAME: ${PROJECT_NAME}"
 else
     echo "No .env file found at $ENV_FILE, using environment defaults"
 fi
@@ -46,8 +47,8 @@ echo "Deploying to AWS Account: $ACCOUNT_ID in region: $AWS_REGION"
 
 # Check if DynamoDB tables already exist
 echo "🔍 Checking for existing DynamoDB tables..."
-USERS_TABLE_EXISTS=$(aws dynamodb describe-table --table-name strands-agent-chatbot-users --region $AWS_REGION 2>/dev/null && echo "true" || echo "false")
-SESSIONS_TABLE_EXISTS=$(aws dynamodb describe-table --table-name strands-agent-chatbot-sessions --region $AWS_REGION 2>/dev/null && echo "true" || echo "false")
+USERS_TABLE_EXISTS=$(aws dynamodb describe-table --table-name "${PROJECT_NAME}-users" --region $AWS_REGION 2>/dev/null && echo "true" || echo "false")
+SESSIONS_TABLE_EXISTS=$(aws dynamodb describe-table --table-name "${PROJECT_NAME}-sessions" --region $AWS_REGION 2>/dev/null && echo "true" || echo "false")
 
 if [ "$USERS_TABLE_EXISTS" = "true" ] && [ "$SESSIONS_TABLE_EXISTS" = "true" ]; then
     echo "✅ Existing DynamoDB tables found - will import them"
@@ -129,7 +130,7 @@ if [ "$ENABLE_COGNITO" = "true" ]; then
     echo ""
     echo "👤 Creating test user..."
     TEST_USER_EMAIL="test@example.com"
-    TEST_USER_PASSWORD="TestUser123!"
+    TEST_USER_PASSWORD=$(LC_ALL=C tr -dc 'A-Za-z0-9!@#$%^&*' < /dev/urandom | head -c 12)
 
     # Check if test user already exists
     USER_EXISTS=$(aws cognito-idp list-users \
@@ -209,6 +210,52 @@ if [ -z "$CORS_ORIGINS" ]; then
 else
     echo "🌐 CORS Origins: $CORS_ORIGINS"
 fi
+
+# Detect configured API keys from Secrets Manager
+echo ""
+echo "🔑 Detecting configured API keys from Secrets Manager..."
+DEFAULT_KEYS=""
+
+# Check Tavily
+if aws secretsmanager get-secret-value --secret-id "strands-agent-chatbot/mcp/tavily-api-key" --region "$AWS_REGION" &>/dev/null; then
+    DEFAULT_KEYS="tavily_api_key"
+    echo "  ✓ Tavily API key found"
+fi
+
+# Check Google Search
+if aws secretsmanager get-secret-value --secret-id "strands-agent-chatbot/mcp/google-credentials" --region "$AWS_REGION" &>/dev/null; then
+    [ -n "$DEFAULT_KEYS" ] && DEFAULT_KEYS="$DEFAULT_KEYS,"
+    DEFAULT_KEYS="${DEFAULT_KEYS}google_api_key,google_search_engine_id"
+    echo "  ✓ Google Search credentials found"
+fi
+
+# Check Google Maps
+if aws secretsmanager get-secret-value --secret-id "strands-agent-chatbot/mcp/google-maps-credentials" --region "$AWS_REGION" &>/dev/null; then
+    [ -n "$DEFAULT_KEYS" ] && DEFAULT_KEYS="$DEFAULT_KEYS,"
+    DEFAULT_KEYS="${DEFAULT_KEYS}google_maps_api_key"
+    echo "  ✓ Google Maps credentials found"
+fi
+
+# Check Nova Act
+if aws secretsmanager get-secret-value --secret-id "strands-agent-chatbot/nova-act-api-key" --region "$AWS_REGION" &>/dev/null; then
+    [ -n "$DEFAULT_KEYS" ] && DEFAULT_KEYS="$DEFAULT_KEYS,"
+    DEFAULT_KEYS="${DEFAULT_KEYS}nova_act_api_key"
+    echo "  ✓ Nova Act API key found"
+fi
+
+if [ -n "$DEFAULT_KEYS" ]; then
+    export NEXT_PUBLIC_DEFAULT_KEYS="$DEFAULT_KEYS"
+    echo "✅ Default API keys: $DEFAULT_KEYS"
+
+    # Save to master .env file
+    MAIN_ENV_FILE="../../.env"
+    grep -v "^NEXT_PUBLIC_DEFAULT_KEYS=" "$MAIN_ENV_FILE" > "$MAIN_ENV_FILE.tmp" 2>/dev/null || touch "$MAIN_ENV_FILE.tmp"
+    mv "$MAIN_ENV_FILE.tmp" "$MAIN_ENV_FILE"
+    echo "NEXT_PUBLIC_DEFAULT_KEYS=$DEFAULT_KEYS" >> "$MAIN_ENV_FILE"
+else
+    echo "⚠️  No default API keys found in Secrets Manager"
+fi
+echo ""
 
 # Collect IP ranges for CIDR-based access control (if not using Cognito)
 if [ "$ENABLE_COGNITO" != "true" ]; then

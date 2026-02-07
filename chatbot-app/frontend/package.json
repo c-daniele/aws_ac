@@ -16,6 +16,7 @@
   "dependencies": {
     "@aws-amplify/ui-react": "^6.0.0",
     "@aws-crypto/sha256-js": "^5.2.0",
+    "@aws-sdk/client-bedrock": "^3.985.0",
     "@aws-sdk/client-bedrock-agentcore": "^3.931.0",
     "@aws-sdk/client-dynamodb": "^3.931.0",
     "@aws-sdk/client-s3": "^3.931.0",
@@ -67,7 +68,7 @@
   },
   "overrides": {
     "mdast-util-to-hast": "^13.2.1",
-    "jspdf": "^4.0.0",
+    "jspdf": "^4.1.0",
     "@smithy/config-resolver": "^4.4.0",
     "lodash": "^4.17.23",
     "fast-xml-parser": "^5.3.4"

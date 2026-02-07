@@ -1,7 +1,21 @@
 import json
 import base64
 import os
+from decimal import Decimal
 from typing import Dict, Any, List, Tuple
+
+
+class DecimalEncoder(json.JSONEncoder):
+    """Custom JSON encoder that handles Decimal types from DynamoDB."""
+
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            # Convert to int if it's a whole number, otherwise float
+            if obj % 1 == 0:
+                return int(obj)
+            return float(obj)
+        return super().default(obj)
+
 
 class StreamEventFormatter:
     """Handles formatting of streaming events for SSE"""
@@ -10,7 +24,7 @@ class StreamEventFormatter:
     def format_sse_event(event_data: dict) -> str:
         """Format event data as Server-Sent Event with proper JSON serialization"""
         try:
-            return f"data: {json.dumps(event_data)}\n\n"
+            return f"data: {json.dumps(event_data, cls=DecimalEncoder)}\n\n"
         except (TypeError, ValueError) as e:
             # Fallback for non-serializable objects
             return f"data: {json.dumps({'type': 'error', 'message': f'Serialization error: {str(e)}'})}\n\n"

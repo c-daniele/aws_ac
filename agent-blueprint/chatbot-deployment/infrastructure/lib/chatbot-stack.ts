@@ -246,13 +246,16 @@ export class ChatbotStack extends cdk.Stack {
       })
     );
 
-    // Secrets Manager Access for Google Maps API Key
+    // Secrets Manager Access for API Keys detection
     codeBuildRole.addToPolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
         actions: ['secretsmanager:GetSecretValue'],
         resources: [
           `arn:aws:secretsmanager:${this.region}:${this.account}:secret:${projectName}/mcp/google-maps-credentials-*`,
+          `arn:aws:secretsmanager:${this.region}:${this.account}:secret:${projectName}/mcp/tavily-api-key-*`,
+          `arn:aws:secretsmanager:${this.region}:${this.account}:secret:${projectName}/mcp/google-credentials-*`,
+          `arn:aws:secretsmanager:${this.region}:${this.account}:secret:${projectName}/nova-act-api-key-*`,
         ],
       })
     );
@@ -288,6 +291,14 @@ export class ChatbotStack extends cdk.Stack {
               `GOOGLE_MAPS_SECRET=$(aws secretsmanager get-secret-value --secret-id "${projectName}/mcp/google-maps-credentials" --region ${this.region} --query SecretString --output text || echo "{}")`,
               `GOOGLE_MAPS_API_KEY=$(echo $GOOGLE_MAPS_SECRET | jq -r '.api_key // empty')`,
               'echo "Google Maps API Key: ${GOOGLE_MAPS_API_KEY:0:10}..." # Show first 10 chars only for security',
+              '',
+              'echo Detecting configured API keys from Secrets Manager...',
+              'DEFAULT_KEYS=""',
+              `if aws secretsmanager get-secret-value --secret-id "${projectName}/mcp/tavily-api-key" --region ${this.region} &>/dev/null; then DEFAULT_KEYS="tavily_api_key"; echo "  ✓ Tavily"; fi`,
+              `if aws secretsmanager get-secret-value --secret-id "${projectName}/mcp/google-credentials" --region ${this.region} &>/dev/null; then [ -n "$DEFAULT_KEYS" ] && DEFAULT_KEYS="$DEFAULT_KEYS,"; DEFAULT_KEYS="\${DEFAULT_KEYS}google_api_key,google_search_engine_id"; echo "  ✓ Google Search"; fi`,
+              `if aws secretsmanager get-secret-value --secret-id "${projectName}/mcp/google-maps-credentials" --region ${this.region} &>/dev/null; then [ -n "$DEFAULT_KEYS" ] && DEFAULT_KEYS="$DEFAULT_KEYS,"; DEFAULT_KEYS="\${DEFAULT_KEYS}google_maps_api_key"; echo "  ✓ Google Maps"; fi`,
+              `if aws secretsmanager get-secret-value --secret-id "${projectName}/nova-act-api-key" --region ${this.region} &>/dev/null; then [ -n "$DEFAULT_KEYS" ] && DEFAULT_KEYS="$DEFAULT_KEYS,"; DEFAULT_KEYS="\${DEFAULT_KEYS}nova_act_api_key"; echo "  ✓ Nova Act"; fi`,
+              'echo "Default API keys: $DEFAULT_KEYS"',
               `BUILD_DATETIME=$(date -u +%Y%m%d%H%M%S)`,
               `APP_VERSION="${process.env.NEXT_PUBLIC_APP_VERSION || '0.0.0'}-$BUILD_DATETIME"`,
               'echo "App Version: $APP_VERSION"',
@@ -302,6 +313,7 @@ export class ChatbotStack extends cdk.Stack {
               '--build-arg NEXT_PUBLIC_COGNITO_USER_POOL_CLIENT_ID=$COGNITO_CLIENT_ID ' +
               '--build-arg NEXT_PUBLIC_STREAMING_API_URL=$ALB_DNS ' +
               '--build-arg NEXT_PUBLIC_GOOGLE_MAPS_EMBED_API_KEY=$GOOGLE_MAPS_API_KEY ' +
+              '--build-arg NEXT_PUBLIC_DEFAULT_KEYS=$DEFAULT_KEYS ' +
               '--build-arg NEXT_PUBLIC_APP_VERSION=$APP_VERSION ' +
               '-t frontend:latest .',
               `docker tag frontend:latest ${frontendRepository.repositoryUri}:latest`,
@@ -703,6 +715,18 @@ async function sendResponse(event, status, data, reason) {
         resources: [
           `arn:aws:logs:${this.region}:${this.account}:log-group:/ecs/chatbot-frontend`,
           `arn:aws:logs:${this.region}:${this.account}:log-group:/ecs/chatbot-frontend:*`
+        ]
+      })
+    );
+
+    frontendTaskDefinition.addToTaskRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'bedrock:ListInferenceProfiles'
+        ],
+        resources: [
+          `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/*`
         ]
       })
     );
