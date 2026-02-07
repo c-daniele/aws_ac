@@ -7,7 +7,7 @@ set -e
 # AWS Profile support
 # Usage: PROFILE=myprofile ./deploy.sh
 
-export PROJECT_NAME="strands-agent-chatbot"
+export PROJECT_NAME="advanced-chatbot"
 
 # Colors
 RED='\033[0;31m'
