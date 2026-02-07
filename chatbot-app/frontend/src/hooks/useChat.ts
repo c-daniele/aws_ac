@@ -9,9 +9,17 @@ import { getApiUrl } from '@/config/environment'
 import { fetchAuthSession } from 'aws-amplify/auth'
 import { apiPost } from '@/lib/api-client'
 
+import { WorkspaceDocument } from './useStreamEvents'
+import { ExtractedDataInfo } from './useCanvasHandlers'
+
 interface UseChatProps {
   onSessionCreated?: () => void
   onArtifactUpdated?: () => void  // Callback when artifact is updated via update_artifact tool
+  onWordDocumentsCreated?: (documents: WorkspaceDocument[]) => void  // Callback when Word documents are created
+  onExcelDocumentsCreated?: (documents: WorkspaceDocument[]) => void  // Callback when Excel documents are created
+  onPptDocumentsCreated?: (documents: WorkspaceDocument[]) => void  // Callback when PowerPoint documents are created
+  onBrowserSessionDetected?: (browserSessionId: string, browserId: string) => void  // Callback when browser session is first detected
+  onExtractedDataCreated?: (data: ExtractedDataInfo) => void  // Callback when browser_extract creates artifact
 }
 
 interface UseChatReturn {
@@ -167,6 +175,7 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
   // ==================== POLLING HOOK ====================
   // Note: Initialize polling first, then pass startPolling to useStreamEvents
   const startPollingRef = useRef<((sessionId: string) => void) | null>(null)
+  const stopPollingRef = useRef<(() => void) | null>(null)
 
   // ==================== STREAM EVENTS HOOK ====================
   const { handleStreamEvent, resetStreamingState } = useStreamEvents({
@@ -178,9 +187,15 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
     currentToolExecutionsRef,
     currentTurnIdRef,
     startPollingRef,
+    stopPollingRef,
     sessionId,
     availableTools,
-    onArtifactUpdated: props?.onArtifactUpdated
+    onArtifactUpdated: props?.onArtifactUpdated,
+    onWordDocumentsCreated: props?.onWordDocumentsCreated,
+    onExcelDocumentsCreated: props?.onExcelDocumentsCreated,
+    onPptDocumentsCreated: props?.onPptDocumentsCreated,
+    onBrowserSessionDetected: props?.onBrowserSessionDetected,
+    onExtractedDataCreated: props?.onExtractedDataCreated
   })
 
   // ==================== CHAT API HOOK ====================
@@ -212,10 +227,11 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
     loadSession: apiLoadSession
   })
 
-  // Update startPollingRef so useStreamEvents can use it
+  // Update polling refs so useStreamEvents can use them
   useEffect(() => {
     startPollingRef.current = startPolling
-  }, [startPolling])
+    stopPollingRef.current = stopPolling
+  }, [startPolling, stopPolling])
 
   // ==================== A2A AGENT UI STATE MANAGEMENT ====================
   // Update UI status based on ongoing A2A agents (research/browser)
@@ -344,38 +360,16 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
     console.log(`[useChat] Swarm mode restored: ${swarmRestored}`)
   }, [apiLoadSession, setAvailableTools, setUIState, setSessionState, stopPolling, checkAndStartPollingForA2ATools])
 
-  // ==================== PROGRESS EVENTS ====================
-  const clearProgressEvents = useCallback(async () => {
-    const currentSessionId = sessionStorage.getItem('chat-session-id')
-    if (!currentSessionId) return
-
-    try {
-      const response = await fetch(getApiUrl(`stream/tools/clear?session_id=${currentSessionId}`), {
-        method: 'POST',
-      })
-      if (response.ok) {
-        console.log('Progress events cleared for session:', currentSessionId)
-      }
-    } catch (error) {
-      console.warn('Failed to clear progress events:', error)
-    }
-  }, [])
-
   // ==================== INITIALIZATION EFFECTS ====================
   // Load tools when backend is ready
   useEffect(() => {
     if (uiState.isConnected) {
       const timeoutId = setTimeout(async () => {
-        const isFirstLoad = sessionStorage.getItem('chat-first-load') !== 'false'
-        if (isFirstLoad) {
-          await clearProgressEvents()
-          sessionStorage.setItem('chat-first-load', 'false')
-        }
         await loadTools()
       }, 1000)
       return () => clearTimeout(timeoutId)
     }
-  }, [uiState.isConnected, clearProgressEvents, loadTools])
+  }, [uiState.isConnected, loadTools])
 
   // Restore last session on page load
   useEffect(() => {

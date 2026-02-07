@@ -1,11 +1,12 @@
 """
-Excel Spreadsheet Tools - 4 essential tools for Excel spreadsheet management.
+Excel Spreadsheet Tools - 5 essential tools for Excel spreadsheet management.
 
 Tools:
 1. create_excel_spreadsheet - Create new Excel spreadsheet from Python code
 2. modify_excel_spreadsheet - Modify existing Excel spreadsheet with openpyxl code
 3. list_my_excel_spreadsheets - List all Excel spreadsheets in workspace
 4. read_excel_spreadsheet - Retrieve spreadsheet for download
+5. preview_excel_sheets - Get sheet screenshot for visual inspection
 
 Note: Uploaded .xlsx files are automatically stored to workspace by agent.py
 Pattern follows word_document_tool for Code Interpreter usage.
@@ -142,6 +143,70 @@ def _get_user_session_ids(tool_context: ToolContext) -> tuple[str, str]:
     return user_id, session_id
 
 
+def _save_excel_artifact(
+    tool_context: ToolContext,
+    filename: str,
+    s3_url: str,
+    size_kb: str,
+    tool_name: str,
+    user_id: str,
+    session_id: str
+) -> None:
+    """Save Excel spreadsheet as artifact to agent.state for Canvas display.
+
+    Args:
+        tool_context: Strands ToolContext
+        filename: Spreadsheet filename (e.g., "report.xlsx")
+        s3_url: Full S3 URL (e.g., "s3://bucket/path/report.xlsx")
+        size_kb: File size string (e.g., "45.2 KB")
+        tool_name: Tool that created this ("create_excel_spreadsheet" or "modify_excel_spreadsheet")
+        user_id: User ID
+        session_id: Session ID
+    """
+    from datetime import datetime, timezone
+
+    try:
+        # Generate artifact ID using filename (without extension) for easy lookup
+        sheet_name = filename.replace('.xlsx', '')
+        artifact_id = f"excel-{sheet_name}"
+
+        # Get current artifacts from agent.state
+        artifacts = tool_context.agent.state.get("artifacts") or {}
+
+        # Create/update artifact
+        artifacts[artifact_id] = {
+            "id": artifact_id,
+            "type": "excel_spreadsheet",
+            "title": filename,
+            "content": s3_url,  # Full S3 URL for OfficeViewer
+            "tool_name": tool_name,
+            "metadata": {
+                "filename": filename,
+                "s3_url": s3_url,
+                "size_kb": size_kb,
+                "user_id": user_id,
+                "session_id": session_id
+            },
+            "created_at": artifacts.get(artifact_id, {}).get("created_at", datetime.now(timezone.utc).isoformat()),
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }
+
+        # Save to agent.state
+        tool_context.agent.state.set("artifacts", artifacts)
+
+        # Sync agent state to persistence
+        session_manager = tool_context.invocation_state.get("session_manager")
+        if not session_manager and hasattr(tool_context.agent, 'session_manager'):
+            session_manager = tool_context.agent.session_manager
+
+        if session_manager:
+            session_manager.sync_agent(tool_context.agent)
+            logger.info(f"Saved Excel artifact: {artifact_id}")
+        else:
+            logger.warning(f"No session_manager found, Excel artifact not persisted: {artifact_id}")
+
+    except Exception as e:
+        logger.error(f"Failed to save Excel artifact: {e}")
 
 
 @tool(context=True)
@@ -289,7 +354,7 @@ ws3['A1'] = 'Detailed Analysis'
         if not is_valid:
             return {
                 "content": [{
-                    "text": f"❌ **Invalid spreadsheet name**: {spreadsheet_name}\n\n{error_msg}\n\n**Examples of valid names:**\n- sales-report\n- Q4-data\n- inventory-2024"
+                    "text": f"**Invalid spreadsheet name**: {spreadsheet_name}\n\n{error_msg}\n\n**Examples of valid names:**\n- sales-report\n- Q4-data\n- inventory-2024"
                 }],
                 "status": "error"
             }
@@ -309,7 +374,7 @@ ws3['A1'] = 'Detailed Analysis'
         if not code_interpreter_id:
             return {
                 "content": [{
-                    "text": "❌ **Code Interpreter not configured**\n\nCODE_INTERPRETER_ID not found in environment or Parameter Store."
+                    "text": "**Code Interpreter not configured**\n\nCODE_INTERPRETER_ID not found in environment or Parameter Store."
                 }],
                 "status": "error"
             }
@@ -362,7 +427,7 @@ print(f"Spreadsheet created: {ci_path}")
                     code_interpreter.stop()
                     return {
                         "content": [{
-                            "text": f"❌ **Failed to create spreadsheet**\n\n```\n{error_msg[:1000]}\n```\n\n💡 Check your openpyxl code for syntax errors or incorrect API usage."
+                            "text": f"**Failed to create spreadsheet**\n\n```\n{error_msg[:1000]}\n```\n\nTip:Check your openpyxl code for syntax errors or incorrect API usage."
                         }],
                         "status": "error"
                     }
@@ -379,11 +444,22 @@ print(f"Spreadsheet created: {ci_path}")
                 metadata={'source': 'python_code_creation'}
             )
 
+            # Save as artifact for Canvas display
+            _save_excel_artifact(
+                tool_context=tool_context,
+                filename=spreadsheet_filename,
+                s3_url=s3_info['s3_url'],
+                size_kb=s3_info['size_kb'],
+                tool_name='create_excel_spreadsheet',
+                user_id=user_id,
+                session_id=session_id
+            )
+
             # Get current workspace list
             workspace_docs = doc_manager.list_s3_documents()
             other_files_count = len([d for d in workspace_docs if d['filename'] != spreadsheet_filename])
 
-            message = f"""✅ **Spreadsheet created successfully**
+            message = f"""**Spreadsheet created successfully**
 
 **File**: {spreadsheet_filename} ({s3_info['size_kb']})
 **Other files in workspace**: {other_files_count} spreadsheet{'s' if other_files_count != 1 else ''}"""
@@ -407,7 +483,7 @@ print(f"Spreadsheet created: {ci_path}")
         logger.error(f"create_excel_spreadsheet failed: {e}")
         return {
             "content": [{
-                "text": f"❌ **Failed to create spreadsheet**\n\n{str(e)}"
+                "text": f"**Failed to create spreadsheet**\n\n{str(e)}"
             }],
             "status": "error"
         }
@@ -519,7 +595,7 @@ if images:
         if not is_valid:
             return {
                 "content": [{
-                    "text": f"❌ **Invalid output name**: {output_name}\n\n{error_msg}\n\n**Examples of valid names:**\n- sales-report-v2\n- Q4-data-final\n- report-revised"
+                    "text": f"**Invalid output name**: {output_name}\n\n{error_msg}\n\n**Examples of valid names:**\n- sales-report-v2\n- Q4-data-final\n- report-revised"
                 }],
                 "status": "error"
             }
@@ -528,7 +604,7 @@ if images:
         if source_name == output_name:
             return {
                 "content": [{
-                    "text": f"❌ **Invalid name**\n\nOutput name must be different from source name to preserve the original.\n\nSource: {source_name}\nOutput: {output_name}\n\n💡 Try: \"{source_name}-v2\""
+                    "text": f"**Invalid name**\n\nOutput name must be different from source name to preserve the original.\n\nSource: {source_name}\nOutput: {output_name}\n\nTip:Try: \"{source_name}-v2\""
                 }],
                 "status": "error"
             }
@@ -549,7 +625,7 @@ if images:
         if not code_interpreter_id:
             return {
                 "content": [{
-                    "text": "❌ **Code Interpreter not configured**\n\nCODE_INTERPRETER_ID not found in environment or Parameter Store."
+                    "text": "**Code Interpreter not configured**\n\nCODE_INTERPRETER_ID not found in environment or Parameter Store."
                 }],
                 "status": "error"
             }
@@ -604,7 +680,7 @@ print(f"Spreadsheet modified and saved: {output_ci_path}")
                     code_interpreter.stop()
                     return {
                         "content": [{
-                            "text": f"❌ **Modification failed**\n\n```\n{error_msg[:1000]}\n```\n\n💡 Check your openpyxl code for syntax errors or incorrect API usage."
+                            "text": f"**Modification failed**\n\n```\n{error_msg[:1000]}\n```\n\nTip:Check your openpyxl code for syntax errors or incorrect API usage."
                         }],
                         "status": "error"
                     }
@@ -625,12 +701,23 @@ print(f"Spreadsheet modified and saved: {output_ci_path}")
                 }
             )
 
+            # Save as artifact for Canvas display
+            _save_excel_artifact(
+                tool_context=tool_context,
+                filename=output_filename,
+                s3_url=s3_info['s3_url'],
+                size_kb=s3_info['size_kb'],
+                tool_name='modify_excel_spreadsheet',
+                user_id=user_id,
+                session_id=session_id
+            )
+
             # Get current workspace list
             workspace_docs = doc_manager.list_s3_documents()
             other_files_count = len([d for d in workspace_docs if d['filename'] != output_filename])
 
             # Build success message
-            message = f"""✅ **Spreadsheet modified successfully**
+            message = f"""**Spreadsheet modified successfully**
 
 **Source**: {source_filename}
 **Saved as**: {output_filename} ({s3_info['size_kb']})
@@ -655,7 +742,7 @@ print(f"Spreadsheet modified and saved: {output_ci_path}")
         logger.error(f"Spreadsheet not found: {e}")
         return {
             "content": [{
-                "text": f"❌ **Spreadsheet not found**: {source_filename}"
+                "text": f"**Spreadsheet not found**: {source_filename}"
             }],
             "status": "error"
         }
@@ -663,7 +750,7 @@ print(f"Spreadsheet modified and saved: {output_ci_path}")
         logger.error(f"modify_excel_spreadsheet failed: {e}")
         return {
             "content": [{
-                "text": f"❌ **Failed to modify spreadsheet**\n\n{str(e)}"
+                "text": f"**Failed to modify spreadsheet**\n\n{str(e)}"
             }],
             "status": "error"
         }
@@ -704,7 +791,7 @@ def list_my_excel_spreadsheets(
             AI: "I found these spreadsheets: ... Which one should I modify?"
 
     Example Output:
-        📁 Workspace (3 spreadsheets):
+        Workspace (3 spreadsheets):
           - sales-report.xlsx (52.3 KB) - Modified: 2025-01-15
           - inventory.xlsx (41.8 KB) - Modified: 2025-01-14
           - Q4-analysis.xlsx (89.2 KB) - Modified: 2025-01-13
@@ -756,7 +843,7 @@ def list_my_excel_spreadsheets(
         logger.error(f"list_my_excel_spreadsheets failed: {e}")
         return {
             "content": [{
-                "text": f"❌ **Failed to list spreadsheets**\n\n{str(e)}"
+                "text": f"**Failed to list spreadsheets**\n\n{str(e)}"
             }],
             "status": "error"
         }
@@ -835,7 +922,7 @@ def read_excel_spreadsheet(
         if not code_interpreter_id:
             return {
                 "content": [{
-                    "text": "❌ **Code Interpreter not configured**\n\nCODE_INTERPRETER_ID not found in environment or Parameter Store."
+                    "text": "**Code Interpreter not configured**\n\nCODE_INTERPRETER_ID not found in environment or Parameter Store."
                 }],
                 "status": "error"
             }
@@ -906,7 +993,7 @@ print(json.dumps(result, ensure_ascii=False))
                     code_interpreter.stop()
                     return {
                         "content": [{
-                            "text": f"❌ **Failed to read spreadsheet**\n\n```\n{error_msg[:1000]}\n```"
+                            "text": f"**Failed to read spreadsheet**\n\n```\n{error_msg[:1000]}\n```"
                         }],
                         "status": "error"
                     }
@@ -922,7 +1009,7 @@ print(json.dumps(result, ensure_ascii=False))
             # Format output text
             output_parts = []
             props = spreadsheet_content.get("properties", {})
-            output_parts.append(f"📊 **Spreadsheet Content**: {spreadsheet_filename} ({doc_info['size_kb']})")
+            output_parts.append(f"**Spreadsheet Content**: {spreadsheet_filename} ({doc_info['size_kb']})")
             output_parts.append(f"**Sheets**: {', '.join(props.get('sheet_names', []))}")
             output_parts.append("")
 
@@ -982,7 +1069,7 @@ print(json.dumps(result, ensure_ascii=False))
         logger.error(f"Spreadsheet not found: {e}")
         return {
             "content": [{
-                "text": f"❌ **Spreadsheet not found**: {spreadsheet_filename}"
+                "text": f"**Spreadsheet not found**: {spreadsheet_filename}"
             }],
             "status": "error"
         }
@@ -990,7 +1077,198 @@ print(json.dumps(result, ensure_ascii=False))
         logger.error(f"read_excel_spreadsheet failed: {e}")
         return {
             "content": [{
-                "text": f"❌ **Failed to read spreadsheet**\n\n{str(e)}"
+                "text": f"**Failed to read spreadsheet**\n\n{str(e)}"
+            }],
+            "status": "error"
+        }
+
+
+@tool(context=True)
+def preview_excel_sheets(
+    spreadsheet_name: str,
+    sheet_names: list[str],
+    tool_context: ToolContext
+) -> Dict[str, Any]:
+    """Get sheet screenshots for YOU (the agent) to visually inspect before editing.
+
+    This tool is for YOUR internal use - to see the actual layout, formatting,
+    charts, and data of sheets before making modifications. Images are sent to you,
+    not displayed to the user.
+
+    Args:
+        spreadsheet_name: Spreadsheet name without extension (e.g., "sales-report")
+        sheet_names: List of sheet names to preview. Use empty list [] for all sheets.
+                    Example: ["Sheet1", "Summary"] or []
+
+    Use BEFORE modifying a spreadsheet to:
+    - See exact data layout and formatting
+    - Identify charts, images, or conditional formatting
+    - Understand column widths and row heights
+    - Plan precise edits based on visual layout
+    """
+    import subprocess
+    import tempfile
+    import base64
+    import io
+    from pdf2image import convert_from_path
+    from openpyxl import load_workbook
+
+    # Get user and session IDs
+    user_id, session_id = _get_user_session_ids(tool_context)
+
+    # Validate and prepare filename
+    spreadsheet_filename = f"{spreadsheet_name}.xlsx"
+    logger.info(f"preview_excel_sheets: {spreadsheet_filename}, sheets {sheet_names}")
+
+    try:
+        # Initialize document manager
+        doc_manager = ExcelManager(user_id, session_id)
+
+        # Check if spreadsheet exists
+        documents = doc_manager.list_s3_documents()
+        doc_info = next((d for d in documents if d['filename'] == spreadsheet_filename), None)
+
+        if not doc_info:
+            available = [d['filename'] for d in documents]
+            return {
+                "content": [{
+                    "text": f"**Spreadsheet not found**: {spreadsheet_filename}\n\n"
+                           f"Available spreadsheets: {', '.join(available) if available else 'None'}"
+                }],
+                "status": "error"
+            }
+
+        # Download Excel spreadsheet from S3
+        xlsx_bytes = doc_manager.load_from_s3(spreadsheet_filename)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Save Excel spreadsheet to temp file
+            xlsx_path = os.path.join(temp_dir, spreadsheet_filename)
+            with open(xlsx_path, 'wb') as f:
+                f.write(xlsx_bytes)
+
+            # Get sheet names from the workbook
+            wb = load_workbook(xlsx_path, read_only=True)
+            all_sheet_names = wb.sheetnames
+            wb.close()
+
+            # Determine which sheets to preview
+            if not sheet_names:
+                # Empty list means all sheets
+                target_sheets = all_sheet_names
+            else:
+                # Validate requested sheet names
+                invalid_sheets = [s for s in sheet_names if s not in all_sheet_names]
+                if invalid_sheets:
+                    return {
+                        "content": [{
+                            "text": f"**Sheet(s) not found**: {', '.join(invalid_sheets)}\n\n"
+                                   f"Available sheets: {', '.join(all_sheet_names)}"
+                        }],
+                        "status": "error"
+                    }
+                target_sheets = sheet_names
+
+            # Convert Excel to PDF using LibreOffice
+            logger.info(f"Converting {spreadsheet_filename} to PDF...")
+            result = subprocess.run(
+                ['soffice', '--headless', '--convert-to', 'pdf', '--outdir', temp_dir, xlsx_path],
+                capture_output=True,
+                text=True,
+                timeout=60  # 60 second timeout
+            )
+
+            if result.returncode != 0:
+                logger.error(f"LibreOffice conversion failed: {result.stderr}")
+                return {
+                    "content": [{
+                        "text": f"**PDF conversion failed**\n\n{result.stderr}"
+                    }],
+                    "status": "error"
+                }
+
+            pdf_path = os.path.join(temp_dir, spreadsheet_filename.replace('.xlsx', '.pdf'))
+
+            if not os.path.exists(pdf_path):
+                return {
+                    "content": [{
+                        "text": "**PDF file not created**\n\nLibreOffice conversion may have failed silently."
+                    }],
+                    "status": "error"
+                }
+
+            # Get total pages in PDF (each sheet becomes a page)
+            from pdf2image import pdfinfo_from_path
+            pdf_info = pdfinfo_from_path(pdf_path)
+            total_pages = pdf_info.get('Pages', len(all_sheet_names))
+
+            # Build content with images
+            # Note: LibreOffice converts sheets in order, so page N = sheet N
+            content = [{
+                "text": f"**{spreadsheet_filename}** - {len(target_sheets)} sheet(s) of {len(all_sheet_names)} total"
+            }]
+
+            for sheet_name in target_sheets:
+                # Get page number (1-indexed, sheets are in order)
+                try:
+                    page_num = all_sheet_names.index(sheet_name) + 1
+                except ValueError:
+                    continue
+
+                if page_num > total_pages:
+                    content.append({"text": f"**{sheet_name}:** (page {page_num} exceeds PDF pages)"})
+                    continue
+
+                logger.info(f"Converting sheet '{sheet_name}' (page {page_num}) to image...")
+                images = convert_from_path(
+                    pdf_path,
+                    first_page=page_num,
+                    last_page=page_num,
+                    dpi=150
+                )
+
+                if images:
+                    img_buffer = io.BytesIO()
+                    images[0].save(img_buffer, format='PNG')
+                    img_bytes = img_buffer.getvalue()
+
+                    content.append({"text": f"**Sheet: {sheet_name}**"})
+                    content.append({
+                        "image": {
+                            "format": "png",
+                            "source": {"bytes": img_bytes}
+                        }
+                    })
+
+            logger.info(f"Successfully generated {len(target_sheets)} preview(s)")
+
+            return {
+                "content": content,
+                "status": "success",
+                "metadata": {
+                    "filename": spreadsheet_filename,
+                    "sheet_names": target_sheets,
+                    "all_sheets": all_sheet_names,
+                    "tool_type": "excel_spreadsheet",
+                    "user_id": user_id,
+                    "session_id": session_id,
+                    "hideImageInChat": True
+                }
+            }
+
+    except subprocess.TimeoutExpired:
+        logger.error("LibreOffice conversion timed out")
+        return {
+            "content": [{
+                "text": "**Conversion timed out**\n\nThe spreadsheet may be too large or complex."
+            }],
+            "status": "error"
+        }
+    except Exception as e:
+        logger.error(f"preview_excel_sheets failed: {e}")
+        return {
+            "content": [{
+                "text": f"**Failed to generate preview**\n\n{str(e)}"
             }],
             "status": "error"
         }

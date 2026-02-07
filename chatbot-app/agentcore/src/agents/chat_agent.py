@@ -12,6 +12,7 @@ from typing import AsyncGenerator, Dict, Any, List, Optional
 from pathlib import Path
 from strands import Agent
 from strands.models import BedrockModel, CacheConfig
+from strands.tools.executors import SequentialToolExecutor
 from agents.base import BaseAgent
 from streaming.event_processor import StreamEventProcessor
 from agent.hooks import ResearchApprovalHook
@@ -85,7 +86,8 @@ class ChatAgent(BaseAgent):
         caching_enabled: Optional[bool] = None,
         compaction_enabled: Optional[bool] = None,
         use_null_conversation_manager: Optional[bool] = None,
-        agent_id: Optional[str] = None
+        agent_id: Optional[str] = None,
+        api_keys: Optional[Dict[str, str]] = None
     ):
         """
         Initialize ChatAgent with specific configuration
@@ -100,6 +102,7 @@ class ChatAgent(BaseAgent):
             caching_enabled: Whether to enable prompt caching
             compaction_enabled: Whether to enable context compaction (default: True)
             use_null_conversation_manager: Use NullConversationManager instead of default SlidingWindow (default: False)
+            api_keys: User-specific API keys for external services
         """
         # Initialize stream processor first (before BaseAgent.__init__)
         global _global_stream_processor
@@ -109,6 +112,7 @@ class ChatAgent(BaseAgent):
         # Initialize Strands agent placeholder
         self.agent = None
         self.use_null_conversation_manager = use_null_conversation_manager if use_null_conversation_manager is not None else False
+        self.api_keys = api_keys  # User-specific API keys
 
         # Call BaseAgent init (handles tools, session_manager)
         super().__init__(
@@ -220,6 +224,35 @@ class ChatAgent(BaseAgent):
                 "agent_id": "default"  # Fixed agent_id for state persistence across requests
             }
 
+            # Use SequentialToolExecutor when artifact-saving tools are enabled
+            # This prevents race conditions when multiple tools try to save to agent.state.artifacts
+            ARTIFACT_SAVING_TOOLS = {
+                'create_word_document', 'modify_word_document',
+                'create_excel_spreadsheet', 'modify_excel_spreadsheet',
+                'create_presentation', 'update_slide_content', 'add_slide',
+                'delete_slides', 'move_slide', 'duplicate_slide', 'update_slide_notes'
+            }
+            # Get tool names from _tool_name attribute (set by @tool decorator)
+            enabled_tool_names = set()
+            for tool in self.tools:
+                tool_name = None
+                if hasattr(tool, '_tool_name'):
+                    tool_name = tool._tool_name
+                elif hasattr(tool, '__name__'):
+                    tool_name = tool.__name__
+                if tool_name:
+                    enabled_tool_names.add(tool_name)
+                logger.debug(f"[ToolExecutor] Tool: {tool}, _tool_name={getattr(tool, '_tool_name', 'N/A')}, __name__={getattr(tool, '__name__', 'N/A')}")
+
+            logger.info(f"[ToolExecutor] Enabled tools: {enabled_tool_names}")
+            logger.info(f"[ToolExecutor] Artifact-saving tools intersection: {ARTIFACT_SAVING_TOOLS & enabled_tool_names}")
+
+            if ARTIFACT_SAVING_TOOLS & enabled_tool_names:
+                agent_kwargs["tool_executor"] = SequentialToolExecutor()
+                logger.info(f"[ToolExecutor] Using SequentialToolExecutor")
+            else:
+                logger.info(f"[ToolExecutor] Using default ConcurrentToolExecutor")
+
             # Use NullConversationManager if requested (disables Strands' default sliding window)
             if self.use_null_conversation_manager:
                 from strands.agent.conversation_manager import NullConversationManager
@@ -246,7 +279,7 @@ class ChatAgent(BaseAgent):
             logger.error(f"Error creating agent: {e}")
             raise
 
-    async def stream_async(self, message: str, session_id: str = None, files: Optional[List] = None, selected_artifact_id: Optional[str] = None) -> AsyncGenerator[str, None]:
+    async def stream_async(self, message: str, session_id: str = None, files: Optional[List] = None, selected_artifact_id: Optional[str] = None, api_keys: Optional[Dict[str, str]] = None) -> AsyncGenerator[str, None]:
         """
         Stream responses using StreamEventProcessor
 
@@ -255,6 +288,7 @@ class ChatAgent(BaseAgent):
             session_id: Session identifier
             files: Optional list of FileContent objects (with base64 bytes)
             selected_artifact_id: Currently selected artifact ID for tool context
+            api_keys: User-specific API keys for external services
         """
         if not self.agent:
             self.create_agent()
@@ -288,6 +322,17 @@ class ChatAgent(BaseAgent):
                 "model_id": self.model_id,
                 "session_manager": self.session_manager  # For tools that need to persist state (e.g., research artifacts)
             }
+
+            # Add user API keys to invocation_state (for gateway tools)
+            effective_api_keys = api_keys or self.api_keys
+            if effective_api_keys:
+                invocation_state['api_keys'] = effective_api_keys
+                logger.debug(f"Added API keys to invocation_state: {len(effective_api_keys)} key(s)")
+
+                # Update Gateway client's api_keys for tool calls
+                if self.gateway_client and hasattr(self.gateway_client, 'api_keys'):
+                    self.gateway_client.api_keys = effective_api_keys
+                    logger.debug(f"Updated Gateway client with user API keys")
 
             # Add uploaded files to invocation_state (for tool access)
             if uploaded_files:

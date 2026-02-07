@@ -64,7 +64,7 @@ class BrowserController:
         # Validate at least one auth method is available
         if not self.nova_api_key and not self.nova_workflow_definition_name:
             raise ValueError(
-                "❌ Nova Act authentication not configured. "
+                "Nova Act authentication not configured. "
                 "Set either NOVA_ACT_API_KEY or NOVA_ACT_WORKFLOW_DEFINITION_NAME. "
                 "For AWS IAM auth, create a workflow: aws nova-act create-workflow-definition --name 'my-workflow'"
             )
@@ -145,7 +145,7 @@ class BrowserController:
             # Require Custom Browser ID - no fallback to system browser
             if not self.browser_id:
                 raise ValueError(
-                    "❌ Custom Browser ID not found. "
+                    "Custom Browser ID not found. "
                     "Browser tools require Custom Browser with Web Bot Auth. "
                     "Please deploy AgentCore Runtime Stack to create Custom Browser."
                 )
@@ -163,7 +163,7 @@ class BrowserController:
                 viewport={'width': 1600, 'height': 900}
             )
 
-            logger.info(f"✅ Browser session started: {session_id}")
+            logger.debug(f" Browser session started: {session_id}")
             ws_url, headers = self.browser_session_client.generate_ws_headers()
 
             # Initialize Nova Act client with AgentCore Browser CDP connection
@@ -243,7 +243,7 @@ class BrowserController:
             logger.info("Taking screenshot...")
             screenshot_data = self._take_screenshot()
 
-            logger.info(f"✅ Successfully navigated to: {current_url}")
+            logger.debug(f" Successfully navigated to: {current_url}")
             logger.info(f"   Page title: {page_title}")
 
             return {
@@ -264,7 +264,7 @@ class BrowserController:
                 "screenshot": None
             }
 
-    def act(self, instruction: str, max_steps: int = 3, timeout: int = 120) -> Dict[str, Any]:
+    def act(self, instruction: str, max_steps: int = 5, timeout: int = 120) -> Dict[str, Any]:
         """Execute natural language instruction using Nova Act
 
         Args:
@@ -316,7 +316,7 @@ class BrowserController:
                 end_time = getattr(metadata, 'end_time', None)
 
                 # Log detailed metadata
-                logger.info(f"✅ Act completed:")
+                logger.debug(f" Act completed:")
                 if session_id:
                     logger.info(f"   Session ID: {session_id}")
                 if act_id:
@@ -332,7 +332,7 @@ class BrowserController:
             # Even if action was partial, we return "success" with details in message
             return {
                 "status": "success",  # Always "success" if no exception (Bedrock requirement)
-                "message": f"{'✓ ' if success else '⚠️ '}{details}{execution_info}",
+                "message": f"{'' if success else '[WARN] '}{details}{execution_info}",
                 "instruction": instruction,
                 "current_url": current_url,
                 "page_title": page_title,
@@ -343,29 +343,29 @@ class BrowserController:
 
         except ActInvalidModelGenerationError as e:
             # Schema validation failed or model generated invalid output
-            logger.error(f"❌ Invalid model generation: {e}")
+            logger.error(f" Invalid model generation: {e}")
             screenshot_data = self._get_error_screenshot()
             return {
                 "status": "error",
-                "message": f"Invalid model output: {str(e)}\n\nTry simplifying the instruction or breaking it into smaller steps.",
+                "message": f"Invalid model output: {str(e)}\n\nCheck the screenshot to see current state and retry from that point.",
                 "instruction": instruction,
                 "screenshot": screenshot_data
             }
 
         except ActExceededMaxStepsError as e:
             # Task too complex for the given max_steps
-            logger.error(f"❌ Exceeded max steps ({max_steps}): {e}")
+            logger.error(f" Exceeded max steps ({max_steps}): {e}")
             screenshot_data = self._get_error_screenshot()
             return {
                 "status": "error",
-                "message": f"Task exceeded {max_steps} steps without completing. Try: 1) Simpler instruction, 2) Different tool, or 3) Ask user.",
+                "message": f"Task exceeded {max_steps} steps without completing. Check the screenshot to see current state and retry from that point.",
                 "instruction": instruction,
                 "screenshot": screenshot_data
             }
 
         except ActTimeoutError as e:
             # Operation timed out
-            logger.error(f"❌ Timeout ({timeout}s): {e}")
+            logger.error(f" Timeout ({timeout}s): {e}")
             screenshot_data = self._get_error_screenshot()
             return {
                 "status": "error",
@@ -376,7 +376,7 @@ class BrowserController:
 
         except (ActAgentError, ActClientError) as e:
             # Retriable errors - agent failed or invalid request
-            logger.error(f"❌ Act error: {e}")
+            logger.error(f" Act error: {e}")
             screenshot_data = self._get_error_screenshot()
             return {
                 "status": "error",
@@ -387,7 +387,7 @@ class BrowserController:
 
         except Exception as e:
             # Unknown error
-            logger.error(f"❌ Unexpected error: {e}")
+            logger.error(f" Unexpected error: {e}")
             screenshot_data = self._get_error_screenshot()
             return {
                 "status": "error",
@@ -405,13 +405,13 @@ class BrowserController:
             pass
         return None
 
-    def extract(self, description: str, schema: Optional[Dict] = None, max_steps: int = 6, timeout: int = 180) -> Dict[str, Any]:
+    def extract(self, description: str, schema: Optional[Dict] = None, max_steps: int = 12, timeout: int = 180) -> Dict[str, Any]:
         """Extract structured data using Nova Act
 
         Args:
             description: Natural language description of what data to extract
             schema: Optional JSON schema for validation (None = no schema validation)
-            max_steps: Maximum number of steps for extraction (default: 6 allows scrolling/pagination)
+            max_steps: Maximum number of steps for extraction (default: 12 allows scrolling/pagination)
             timeout: Timeout in seconds for extraction (default: 180s = 3 minutes)
         """
         try:
@@ -454,7 +454,7 @@ class BrowserController:
                 end_time = getattr(metadata, 'end_time', None)
 
                 # Log detailed metadata
-                logger.info(f"✅ Extraction completed:")
+                logger.debug(f" Extraction completed:")
                 if session_id:
                     logger.info(f"   Session ID: {session_id}")
                 if act_id:
@@ -480,29 +480,29 @@ class BrowserController:
 
         except ActInvalidModelGenerationError as e:
             # Schema validation failed - this is the error you experienced!
-            logger.error(f"❌ Schema validation failed: {e}")
+            logger.error(f" Schema validation failed: {e}")
             screenshot_data = self._get_error_screenshot()
             return {
                 "status": "error",
-                "message": f"Schema validation failed: {str(e)}\n\nThe extracted data didn't match the expected format. Try simplifying the description or using no schema.",
+                "message": f"Schema validation failed: {str(e)}\n\nThe extracted data didn't match the expected format. Check the screenshot and adjust the schema or description.",
                 "description": description,
                 "screenshot": screenshot_data
             }
 
         except ActExceededMaxStepsError as e:
             # Extraction too complex
-            logger.error(f"❌ Exceeded max steps ({max_steps}): {e}")
+            logger.error(f" Exceeded max steps ({max_steps}): {e}")
             screenshot_data = self._get_error_screenshot()
             return {
                 "status": "error",
-                "message": f"Extraction exceeded {max_steps} steps. Try: 1) Simpler schema, 2) Extract partial data, or 3) Different approach.",
+                "message": f"Extraction exceeded {max_steps} steps. Check the screenshot to see current state and retry with adjusted approach.",
                 "description": description,
                 "screenshot": screenshot_data
             }
 
         except ActTimeoutError as e:
             # Extraction timed out
-            logger.error(f"❌ Timeout ({timeout}s): {e}")
+            logger.error(f" Timeout ({timeout}s): {e}")
             screenshot_data = self._get_error_screenshot()
             return {
                 "status": "error",
@@ -513,7 +513,7 @@ class BrowserController:
 
         except (ActAgentError, ActClientError) as e:
             # Retriable errors
-            logger.error(f"❌ Extraction error: {e}")
+            logger.error(f" Extraction error: {e}")
             screenshot_data = self._get_error_screenshot()
             return {
                 "status": "error",
@@ -524,7 +524,7 @@ class BrowserController:
 
         except Exception as e:
             # Unknown error
-            logger.error(f"❌ Unexpected error: {e}")
+            logger.error(f" Unexpected error: {e}")
             screenshot_data = self._get_error_screenshot()
             return {
                 "status": "error",
@@ -703,7 +703,7 @@ class BrowserController:
                 "breadcrumbs": breadcrumbs
             }
 
-            logger.info(f"✅ Page info collected: {len(buttons)} buttons, {len(links)} links, {len(inputs)} inputs")
+            logger.debug(f" Page info collected: {len(buttons)} buttons, {len(links)} links, {len(inputs)} inputs")
 
             return {
                 "status": "success",
@@ -755,7 +755,7 @@ class BrowserController:
 
                 duration = time.time() - start_time
                 size_kb = len(screenshot_bytes) / 1024
-                logger.info(f"📸 Screenshot: {duration:.2f}s, {size_kb:.1f}KB")
+                logger.debug(f" Screenshot: {duration:.2f}s, {size_kb:.1f}KB")
 
                 return screenshot_bytes
             finally:
