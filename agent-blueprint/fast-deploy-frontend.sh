@@ -1,0 +1,165 @@
+#!/bin/bash
+set -e
+
+# Fast Deploy Script for Frontend
+# Uploads source code to S3 and triggers CodeBuild without CDK deployment
+
+PROJECT_NAME="${PROJECT_NAME:-advanced-chatbot}"
+AWS_REGION="${AWS_REGION:-us-west-2}"
+
+# Colors
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+log_info() { echo -e "${GREEN}✓${NC} $1"; }
+log_step() { echo -e "${BLUE}▶${NC} $1"; }
+log_warn() { echo -e "${YELLOW}⚠${NC} $1"; }
+log_error() { echo -e "${RED}✗${NC} $1"; }
+
+echo "========================================"
+echo "  Frontend - Fast Deploy"
+echo "========================================"
+echo ""
+
+# Get AWS Account ID
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+
+# S3 bucket name (from CDK stack pattern)
+SOURCE_BUCKET="${PROJECT_NAME}-frontend-sources-${ACCOUNT_ID}-${AWS_REGION}"
+
+# ECR repository URI
+REPO_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/chatbot-frontend"
+
+# CodeBuild project name (from CDK stack pattern)
+BUILD_PROJECT="${PROJECT_NAME}-frontend-builder"
+
+# ECS cluster and service names
+ECS_CLUSTER="chatbot-cluster"
+
+log_info "Fast deploying Frontend..."
+log_info "Region: $AWS_REGION"
+log_info "Account: $ACCOUNT_ID"
+echo ""
+
+# Upload source code to S3
+log_step "Uploading source code to S3..."
+aws s3 sync ../chatbot-app/frontend \
+    "s3://${SOURCE_BUCKET}/frontend-source/" \
+    --exclude "node_modules/**" \
+    --exclude ".next/**" \
+    --exclude ".git/**" \
+    --exclude "*.log" \
+    --exclude ".DS_Store" \
+    --exclude "build/**" \
+    --exclude "dist/**" \
+    --region $AWS_REGION \
+    --quiet
+
+log_info "Source code uploaded to S3"
+echo ""
+
+# Trigger CodeBuild
+log_step "Triggering CodeBuild..."
+BUILD_ID=$(aws codebuild start-build \
+    --project-name "$BUILD_PROJECT" \
+    --region $AWS_REGION \
+    --query 'build.id' \
+    --output text)
+
+log_info "Build started: $BUILD_ID"
+echo ""
+
+# Monitor build progress
+log_step "Monitoring build progress..."
+echo ""
+
+while true; do
+    BUILD_STATUS=$(aws codebuild batch-get-builds \
+        --ids "$BUILD_ID" \
+        --region $AWS_REGION \
+        --query 'builds[0].buildStatus' \
+        --output text)
+
+    case $BUILD_STATUS in
+        "IN_PROGRESS")
+            echo -n "."
+            sleep 10
+            ;;
+        "SUCCEEDED")
+            echo ""
+            log_info "Build completed successfully!"
+            break
+            ;;
+        "FAILED"|"FAULT"|"TIMED_OUT"|"STOPPED")
+            echo ""
+            log_error "Build failed with status: $BUILD_STATUS"
+
+            # Get build logs URL
+            LOG_GROUP=$(aws codebuild batch-get-builds \
+                --ids "$BUILD_ID" \
+                --region $AWS_REGION \
+                --query 'builds[0].logs.groupName' \
+                --output text)
+
+            LOG_STREAM=$(aws codebuild batch-get-builds \
+                --ids "$BUILD_ID" \
+                --region $AWS_REGION \
+                --query 'builds[0].logs.streamName' \
+                --output text)
+
+            echo ""
+            echo "Check logs at:"
+            echo "https://console.aws.amazon.com/cloudwatch/home?region=${AWS_REGION}#logEventViewer:group=${LOG_GROUP};stream=${LOG_STREAM}"
+            exit 1
+            ;;
+    esac
+done
+
+echo ""
+
+# Force ECS service update to pull new image
+log_step "Forcing ECS service update..."
+
+# Find the actual service name (it includes a random suffix from CDK)
+ACTUAL_SERVICE=$(aws ecs list-services \
+    --cluster "$ECS_CLUSTER" \
+    --region $AWS_REGION \
+    --query "serviceArns[?contains(@, 'Frontend')]" \
+    --output text | head -1 | xargs -I {} basename {})
+
+if [ -n "$ACTUAL_SERVICE" ]; then
+    aws ecs update-service \
+        --cluster "$ECS_CLUSTER" \
+        --service "$ACTUAL_SERVICE" \
+        --force-new-deployment \
+        --region $AWS_REGION \
+        --query 'service.serviceName' \
+        --output text > /dev/null
+
+    log_info "ECS service update triggered: $ACTUAL_SERVICE"
+    echo ""
+
+    # Wait for deployment to stabilize
+    log_step "Waiting for deployment to stabilize..."
+    aws ecs wait services-stable \
+        --cluster "$ECS_CLUSTER" \
+        --services "$ACTUAL_SERVICE" \
+        --region $AWS_REGION 2>/dev/null || true
+
+    log_info "Deployment stabilized!"
+else
+    log_warn "Could not find Frontend ECS service. Manual service restart may be required."
+fi
+
+echo ""
+echo "========================================"
+log_info "Fast deployment complete!"
+echo "========================================"
+echo ""
+log_info "New container image pushed to: $REPO_URI:latest"
+echo ""
+log_info "Frontend is now running with the updated code"
+echo ""
