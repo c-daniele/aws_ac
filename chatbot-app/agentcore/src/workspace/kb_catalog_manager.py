@@ -628,6 +628,8 @@ class KBCatalogManager:
             S3 key of uploaded document
         """
         s3_key = f"{self.user_id}/{catalog_id}/{document_id}-{filename}"
+        
+        logger.info(f"Uploading document to S3:, {self.kb_docs_bucket}/{s3_key} (size: {len(file_content)} bytes), catalog ID: {catalog_id}, document ID: {document_id}")
 
         self.s3_client.put_object(
             Bucket=self.kb_docs_bucket,

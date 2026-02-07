@@ -731,6 +731,18 @@ async function sendResponse(event, status, data, reason) {
       })
     );
 
+    frontendTaskDefinition.addToTaskRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'bedrock:ListFoundationModels'
+        ],
+        resources: [
+          `*`
+        ]
+      })
+    );
+
     // Frontend + BFF Container
     const frontendEnvironment: { [key: string]: string } = {
       NODE_ENV: 'production',

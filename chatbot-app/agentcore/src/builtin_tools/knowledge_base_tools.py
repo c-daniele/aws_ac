@@ -20,11 +20,30 @@ Metadata filtering (user_id, catalog_id) provides multi-tenant isolation.
 import os
 import base64
 import logging
+from decimal import Decimal
 from typing import Dict, Any, Optional
 from strands import tool, ToolContext
 from workspace.kb_catalog_manager import KBCatalogManager
 
 logger = logging.getLogger(__name__)
+
+
+def _convert_decimals(obj: Any) -> Any:
+    """Recursively convert Decimal values to int or float.
+
+    DynamoDB returns numbers as Decimal, which are not JSON serializable.
+    This converts them to native Python types.
+    """
+    if isinstance(obj, Decimal):
+        # Convert to int if it's a whole number, otherwise float
+        if obj % 1 == 0:
+            return int(obj)
+        return float(obj)
+    elif isinstance(obj, dict):
+        return {k: _convert_decimals(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_convert_decimals(item) for item in obj]
+    return obj
 
 
 def _get_manager(tool_context: ToolContext) -> KBCatalogManager:
@@ -33,12 +52,14 @@ def _get_manager(tool_context: ToolContext) -> KBCatalogManager:
     return KBCatalogManager(user_id, session_id)
 
 
-def _error_response(message: str, error_code: str = "ERROR") -> Dict[str, Any]:
+def _error_response(message: str, error_code: str = "ERROR", metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Create standardized error response."""
+    # Convert any Decimal values in metadata to native Python types
+    converted_metadata = _convert_decimals(metadata) if metadata else {}
     return {
         "content": [{"text": f"Error: {message}"}],
         "status": "error",
-        "metadata": {"error_code": error_code, "tool_type": "knowledge_base"},
+        "metadata": {"error_code": error_code, "tool_type": "knowledge_base", **converted_metadata},
     }
 
 
@@ -46,10 +67,12 @@ def _success_response(
     message: str, metadata: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """Create standardized success response."""
+    # Convert any Decimal values in metadata to native Python types
+    converted_metadata = _convert_decimals(metadata) if metadata else {}
     return {
         "content": [{"text": message}],
         "status": "success",
-        "metadata": {**(metadata or {}), "tool_type": "knowledge_base"},
+        "metadata": {**converted_metadata, "tool_type": "knowledge_base"},
     }
 
 

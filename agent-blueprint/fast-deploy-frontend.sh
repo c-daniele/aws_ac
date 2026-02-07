@@ -39,6 +39,13 @@ BUILD_PROJECT="${PROJECT_NAME}-frontend-builder"
 # ECS cluster and service names
 ECS_CLUSTER="chatbot-cluster"
 
+# Check if package-lock.json needs update
+if ! npm ci --dry-run &>/dev/null; then
+    log_warn "package-lock.json out of sync, running npm install..."
+    npm install
+fi
+
+
 log_info "Fast deploying Frontend..."
 log_info "Region: $AWS_REGION"
 log_info "Account: $ACCOUNT_ID"
