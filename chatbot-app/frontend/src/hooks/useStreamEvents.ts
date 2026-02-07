@@ -1,4 +1,4 @@
-import { useCallback, useRef, startTransition } from 'react'
+import { useCallback, useRef, startTransition, useEffect } from 'react'
 import { flushSync } from 'react-dom'
 import { Message, ToolExecution } from '@/types/chat'
 import { StreamEvent, ChatSessionState, ChatUIState, WorkspaceFile, SWARM_AGENT_DISPLAY_NAMES, SwarmAgentStep } from '@/types/events'
@@ -66,6 +66,13 @@ export const useStreamEvents = ({
   const streamingStartedRef = useRef(false)
   const streamingIdRef = useRef<string | null>(null)
   const completeProcessedRef = useRef(false)
+
+  // Ref to track sessionState without causing circular dependency in useCallback
+  // This breaks the infinite loop where setSessionState -> sessionState change -> callback recreation
+  const sessionStateRef = useRef(sessionState)
+  useEffect(() => {
+    sessionStateRef.current = sessionState
+  }, [sessionState])
 
   // Swarm mode state
   const swarmModeRef = useRef<{
@@ -149,7 +156,7 @@ export const useStreamEvents = ({
       }
 
       // Finalize reasoning step if active
-      if (sessionState.reasoning?.isActive) {
+      if (sessionStateRef.current.reasoning?.isActive) {
         setSessionState(prev => ({
           ...prev,
           reasoning: prev.reasoning ? { ...prev.reasoning, isActive: false } : null
@@ -223,7 +230,7 @@ export const useStreamEvents = ({
         textBuffer.appendChunk(data.text)
       }
     }
-  }, [sessionState, setSessionState, setMessages, setUIState, streamingStartedRef, streamingIdRef, metadataTracking, textBuffer])
+  }, [setSessionState, setMessages, setUIState, metadataTracking, textBuffer])
 
   const handleToolUseEvent = useCallback((data: StreamEvent) => {
     if (data.type === 'tool_use') {
@@ -463,7 +470,7 @@ export const useStreamEvents = ({
       // Extract browser session info from metadata (for Live View)
       // Only set on first browser tool use to prevent unnecessary DCV reconnections
       const browserSessionUpdate: any = {}
-      if (!sessionState.browserSession && data.metadata?.browserSessionId) {
+      if (!sessionStateRef.current.browserSession && data.metadata?.browserSessionId) {
         const browserSession = {
           sessionId: data.metadata.browserSessionId,
           browserId: data.metadata.browserId || null
@@ -529,7 +536,7 @@ export const useStreamEvents = ({
         return msg
       }))
     }
-  }, [currentToolExecutionsRef, sessionState, setSessionState, setMessages, setUIState])
+  }, [currentToolExecutionsRef, setSessionState, setMessages, setUIState, onArtifactUpdated])
 
   const handleCompleteEvent = useCallback(async (data: StreamEvent) => {
     if (data.type === 'complete') {
@@ -907,7 +914,7 @@ export const useStreamEvents = ({
         swarmModeRef.current = { isActive: false, nodeHistory: [], agentSteps: [] }
       }
     }
-  }, [uiState, setMessages, setUIState, setSessionState, streamingStartedRef, streamingIdRef, completeProcessedRef, metadataTracking, textBuffer])
+  }, [setMessages, setUIState, setSessionState, metadataTracking, textBuffer])
 
   const handleInterruptEvent = useCallback((data: StreamEvent) => {
     if (data.type === 'interrupt') {

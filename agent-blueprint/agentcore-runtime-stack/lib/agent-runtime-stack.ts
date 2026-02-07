@@ -3,6 +3,7 @@
  * Deploys Strands Agent as AgentCore Runtime using L1 constructs (CfnRuntime)
  * Includes CodeBuild for automated container image building
  * Includes AgentCore Memory for user preference retention using L1 construct (CfnMemory)
+ * Includes Bedrock Knowledge Base with S3 Vector Bucket for RAG capabilities
  * Based on: sdk-python/sample-amazon-bedrock-agentcore-fullstack-webapp
  */
 import * as cdk from 'aws-cdk-lib'
@@ -16,6 +17,7 @@ import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment'
 import * as codebuild from 'aws-cdk-lib/aws-codebuild'
 import * as cr from 'aws-cdk-lib/custom-resources'
 import * as lambda from 'aws-cdk-lib/aws-lambda'
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb'
 import { Construct } from 'constructs'
 
 export interface AgentRuntimeStackProps extends cdk.StackProps {
@@ -372,6 +374,319 @@ export class AgentRuntimeStack extends cdk.Stack {
         ],
       })
     )
+
+    // ============================================================
+    // Knowledge Base Infrastructure
+    // S3 bucket for KB documents, S3 Vector Bucket, Bedrock KB
+    // ============================================================
+
+    // T001: S3 bucket for KB documents (user uploads for RAG)
+    const kbDocsBucket = new s3.Bucket(this, 'KBDocsBucket', {
+      bucketName: `${projectName}-kb-docs-${this.account}-${this.region}`,
+      removalPolicy: cdk.RemovalPolicy.RETAIN, // Retain user documents on stack deletion
+      autoDeleteObjects: false,
+      versioned: true,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      lifecycleRules: [
+        {
+          id: 'DeleteOldVersions',
+          noncurrentVersionExpiration: cdk.Duration.days(90),
+        },
+      ],
+      cors: [
+        {
+          allowedMethods: [
+            s3.HttpMethods.GET,
+            s3.HttpMethods.PUT,
+            s3.HttpMethods.DELETE,
+          ],
+          allowedOrigins: ['*'], // TODO: Restrict to frontend domain in production
+          allowedHeaders: ['*'],
+          maxAge: 3000,
+        },
+      ],
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+    })
+
+    // Grant Runtime execution role permissions for KB docs bucket
+    executionRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'KBDocsBucketAccess',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          's3:PutObject',
+          's3:GetObject',
+          's3:DeleteObject',
+          's3:ListBucket',
+        ],
+        resources: [
+          kbDocsBucket.bucketArn,
+          `${kbDocsBucket.bucketArn}/*`,
+        ],
+      })
+    )
+
+    // T002: S3 Vector Bucket for KB embeddings (shared across all catalogs)
+    // Note: Using CfnResource as S3 Vectors is a newer service
+    const kbVectorBucketName = `${projectName}-kb-vectors`
+    const kbVectorBucket = new cdk.CfnResource(this, 'KBVectorBucket', {
+      type: 'AWS::S3Vectors::VectorBucket',
+      properties: {
+        VectorBucketName: kbVectorBucketName,
+      },
+    })
+
+    // T003: S3 Vector Index (float32, 1024 dimensions for Titan embeddings, cosine distance)
+    const kbVectorIndexName = `${projectName}-kb-vector-index`
+    const kbVectorIndex = new cdk.CfnResource(this, 'KBVectorIndex', {
+      type: 'AWS::S3Vectors::Index',
+      properties: {
+        VectorBucketName: kbVectorBucketName,
+        IndexName: kbVectorIndexName,
+        DataType: 'float32',
+        Dimension: 1024, // Amazon Titan Text Embeddings v2 dimension
+        DistanceMetric: 'cosine',
+        MetadataConfiguration: {
+          // These metadata keys should NOT be used for filtering (internal Bedrock use)
+          NonFilterableMetadataKeys: [
+            'x-amz-bedrock-kb-source-uri',
+            'x-amz-bedrock-kb-chunk-id',
+            'x-amz-bedrock-kb-data-source-id',
+            'AMAZON_BEDROCK_TEXT',
+            'AMAZON_BEDROCK_METADATA',
+          ],
+        },
+      },
+    })
+    kbVectorIndex.addDependency(kbVectorBucket)
+
+    // T005: IAM role for Bedrock KB service
+    const bedrockKBServiceRole = new iam.Role(this, 'BedrockKBServiceRole', {
+      assumedBy: new iam.ServicePrincipal('bedrock.amazonaws.com'),
+      description: 'Service role for Bedrock Knowledge Base to access S3 and embedding models',
+    })
+
+    // Grant KB service role access to KB docs bucket
+    bedrockKBServiceRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'S3ListAccess',
+        effect: iam.Effect.ALLOW,
+        actions: ['s3:ListBucket'],
+        resources: [kbDocsBucket.bucketArn],
+        conditions: {
+          StringEquals: {
+            'aws:PrincipalAccount': this.account,
+          },
+        },
+      })
+    )
+
+    bedrockKBServiceRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'S3GetAccess',
+        effect: iam.Effect.ALLOW,
+        actions: ['s3:GetObject'],
+        resources: [`${kbDocsBucket.bucketArn}/*`],
+        conditions: {
+          StringEquals: {
+            'aws:PrincipalAccount': this.account,
+          },
+        },
+      })
+    )
+
+    // Grant KB service role access to S3 Vector Bucket
+    bedrockKBServiceRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'S3VectorBucketAccess',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          's3vectors:CreateIndex',
+          's3vectors:DeleteIndex',
+          's3vectors:GetIndex',
+          's3vectors:ListIndexes',
+          's3vectors:PutVectors',
+          's3vectors:GetVectors',
+          's3vectors:DeleteVectors',
+          's3vectors:QueryVectors',
+          's3vectors:ListVectors',
+        ],
+        resources: [
+          `arn:aws:s3vectors:${this.region}:${this.account}:bucket/${kbVectorBucketName}`,
+          `arn:aws:s3vectors:${this.region}:${this.account}:bucket/${kbVectorBucketName}/*`,
+        ],
+      })
+    )
+
+    // Grant KB service role access to Bedrock embedding models
+    bedrockKBServiceRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'BedrockEmbeddingModelAccess',
+        effect: iam.Effect.ALLOW,
+        actions: ['bedrock:InvokeModel'],
+        resources: [
+          `arn:aws:bedrock:${this.region}::foundation-model/amazon.titan-embed-text-v2:0`,
+        ],
+      })
+    )
+
+    // T004: Bedrock Knowledge Base (single shared KB, data sources created per catalog)
+    // Using CfnResource as S3_VECTORS storage type is not yet in CDK types
+    const kbName = `${projectName}-knowledge-base`
+    const knowledgeBase = new cdk.CfnResource(this, 'KnowledgeBase', {
+      type: 'AWS::Bedrock::KnowledgeBase',
+      properties: {
+        Name: kbName,
+        Description: 'Shared Knowledge Base for user document catalogs with RAG capabilities',
+        RoleArn: bedrockKBServiceRole.roleArn,
+        KnowledgeBaseConfiguration: {
+          Type: 'VECTOR',
+          VectorKnowledgeBaseConfiguration: {
+            EmbeddingModelArn: `arn:aws:bedrock:${this.region}::foundation-model/amazon.titan-embed-text-v2:0`,
+            EmbeddingModelConfiguration: {
+              BedrockEmbeddingModelConfiguration: {
+                Dimensions: 1024,
+                EmbeddingDataType: 'FLOAT32',
+              },
+            },
+          },
+        },
+        StorageConfiguration: {
+          Type: 'S3_VECTORS',
+          S3VectorsConfiguration: {
+            VectorBucketArn: `arn:aws:s3vectors:${this.region}:${this.account}:bucket/${kbVectorBucketName}`,
+            IndexArn: `arn:aws:s3vectors:${this.region}:${this.account}:bucket/${kbVectorBucketName}/index/${kbVectorIndexName}`,
+          },
+        },
+        Tags: {
+          Environment: environment,
+          Application: projectName
+        },
+      },
+    })
+    knowledgeBase.addDependency(kbVectorIndex)
+    knowledgeBase.node.addDependency(bedrockKBServiceRole)
+
+    // T006: IAM permissions for application to use Knowledge Base
+    executionRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'BedrockKBQueryAccess',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'bedrock:Retrieve',
+          'bedrock:RetrieveAndGenerate',
+        ],
+        resources: [knowledgeBase.getAtt('KnowledgeBaseArn').toString()],
+      })
+    )
+
+    executionRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'BedrockKBDataSourceManagement',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'bedrock:CreateDataSource',
+          'bedrock:DeleteDataSource',
+          'bedrock:GetDataSource',
+          'bedrock:ListDataSources',
+          'bedrock:UpdateDataSource',
+          'bedrock:StartIngestionJob',
+          'bedrock:GetIngestionJob',
+          'bedrock:ListIngestionJobs',
+        ],
+        resources: [
+          knowledgeBase.getAtt('KnowledgeBaseArn').toString(),
+          `${knowledgeBase.getAtt('KnowledgeBaseArn').toString()}/*`,
+        ],
+      })
+    )
+
+    // Grant application access to S3 Vectors for query operations
+    executionRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'S3VectorsQueryAccess',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          's3vectors:GetVectors',
+          's3vectors:QueryVectors',
+          's3vectors:ListVectors',
+        ],
+        resources: [
+          `arn:aws:s3vectors:${this.region}:${this.account}:bucket/${kbVectorBucketName}`,
+          `arn:aws:s3vectors:${this.region}:${this.account}:bucket/${kbVectorBucketName}/*`,
+        ],
+      })
+    )
+
+    // Store KB configuration in Parameter Store
+    new ssm.StringParameter(this, 'KBIdParameter', {
+      parameterName: `/${projectName}/${environment}/agentcore/kb-id`,
+      stringValue: knowledgeBase.getAtt('KnowledgeBaseId').toString(),
+      description: 'Bedrock Knowledge Base ID for RAG queries',
+      tier: ssm.ParameterTier.STANDARD,
+    })
+
+    new ssm.StringParameter(this, 'KBDocsBucketParameter', {
+      parameterName: `/${projectName}/${environment}/agentcore/kb-docs-bucket`,
+      stringValue: kbDocsBucket.bucketName,
+      description: 'S3 bucket for Knowledge Base documents',
+      tier: ssm.ParameterTier.STANDARD,
+    })
+
+    // ============================================================
+    // KB Catalog DynamoDB Table (Data Model Refactor)
+    // Dedicated table for catalog and document metadata
+    // ============================================================
+
+    // T001-T003: Create DynamoDB table for KB Catalogs with new key schema
+    // PK: catalog_id, SK: METADATA (for catalog) or DOC#{document_id} (for documents)
+    const kbCatalogTable = new dynamodb.Table(this, 'KBCatalogTable', {
+      tableName: `${projectName}-kb-catalog`,
+      partitionKey: { name: 'catalog_id', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY, // Change to RETAIN for production
+      pointInTimeRecoverySpecification: {
+        pointInTimeRecoveryEnabled: true,
+      },
+    })
+
+    // T002: Add GSI for user_id lookups (list all catalogs for a user)
+    kbCatalogTable.addGlobalSecondaryIndex({
+      indexName: 'user_id-index',
+      partitionKey: { name: 'user_id', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.KEYS_ONLY,
+    })
+
+    // T004: Grant execution role permissions for KB Catalog table
+    executionRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'KBCatalogTableAccess',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'dynamodb:GetItem',
+          'dynamodb:PutItem',
+          'dynamodb:UpdateItem',
+          'dynamodb:DeleteItem',
+          'dynamodb:Query',
+          'dynamodb:BatchGetItem',
+          'dynamodb:BatchWriteItem',
+          'dynamodb:DescribeTable',
+        ],
+        resources: [
+          kbCatalogTable.tableArn,
+          `${kbCatalogTable.tableArn}/index/*`,
+        ],
+      })
+    )
+
+    // Store KB Catalog table name in Parameter Store
+    new ssm.StringParameter(this, 'KBCatalogTableParameter', {
+      parameterName: `/${projectName}/${environment}/agentcore/kb-catalog-table`,
+      stringValue: kbCatalogTable.tableName,
+      description: 'DynamoDB table for KB Catalog metadata',
+      tier: ssm.ParameterTier.STANDARD,
+    })
 
     // ============================================================
     // Step 2: CodeBuild Project for Building Container
@@ -867,6 +1182,12 @@ async function sendResponse(event, status, data, reason) {
           'dynamodb:GetItem',
           'dynamodb:Query',
           'dynamodb:UpdateItem',  // Required for clearing stop signal
+          'dynamodb:PutItem',
+          'dynamodb:DeleteItem',
+          'dynamodb:BatchGet*',
+          'dynamodb:DescribeTable',
+          'dynamodb:Scan',
+          'dynamodb:BatchWrite*',
         ],
         resources: [
           `arn:aws:dynamodb:${this.region}:${this.account}:table/${projectName}-users-v2`,
@@ -912,6 +1233,11 @@ async function sendResponse(event, status, data, reason) {
         BROWSER_NAME: browserCustomName,
         CODE_INTERPRETER_ID: codeInterpreter.attrCodeInterpreterId,
         DOCUMENT_BUCKET: documentBucket.bucketName,
+        // T007: Knowledge Base environment variables
+        KB_ID: knowledgeBase.getAtt('KnowledgeBaseId').toString(),
+        KB_DOCS_BUCKET: kbDocsBucket.bucketName,
+        // T005: KB Catalog table environment variable
+        KB_CATALOG_TABLE: kbCatalogTable.tableName,
         // OpenTelemetry observability configuration
         AGENT_OBSERVABILITY_ENABLED: 'true',
         OTEL_PYTHON_DISTRO: 'aws_distro',
@@ -927,10 +1253,11 @@ async function sendResponse(event, status, data, reason) {
       },
     })
 
-    // Ensure Runtime is created after build completes, role is ready, and memory is created
+    // Ensure Runtime is created after build completes, role is ready, memory and KB are created
     runtime.node.addDependency(executionRole)
     runtime.node.addDependency(buildWaiter)
     runtime.node.addDependency(memory)
+    runtime.node.addDependency(knowledgeBase)
 
     // Store the runtime reference
     this.runtime = runtime
@@ -1020,6 +1347,44 @@ async function sendResponse(event, status, data, reason) {
       value: documentBucket.bucketArn,
       description: 'S3 bucket ARN for document storage',
       exportName: `${projectName}-document-bucket-arn`,
+    })
+
+    // Knowledge Base Outputs
+    new cdk.CfnOutput(this, 'KnowledgeBaseId', {
+      value: knowledgeBase.getAtt('KnowledgeBaseId').toString(),
+      description: 'Bedrock Knowledge Base ID for RAG queries',
+      exportName: `${projectName}-kb-id`,
+    })
+
+    new cdk.CfnOutput(this, 'KnowledgeBaseArn', {
+      value: knowledgeBase.getAtt('KnowledgeBaseArn').toString(),
+      description: 'Bedrock Knowledge Base ARN',
+      exportName: `${projectName}-kb-arn`,
+    })
+
+    new cdk.CfnOutput(this, 'KBDocsBucketName', {
+      value: kbDocsBucket.bucketName,
+      description: 'S3 bucket for Knowledge Base documents',
+      exportName: `${projectName}-kb-docs-bucket`,
+    })
+
+    new cdk.CfnOutput(this, 'KBVectorBucketName', {
+      value: kbVectorBucketName,
+      description: 'S3 Vector Bucket for Knowledge Base embeddings',
+      exportName: `${projectName}-kb-vector-bucket`,
+    })
+
+    // KB Catalog Table Output
+    new cdk.CfnOutput(this, 'KBCatalogTableName', {
+      value: kbCatalogTable.tableName,
+      description: 'DynamoDB table for KB Catalog metadata',
+      exportName: `${projectName}-kb-catalog-table`,
+    })
+
+    new cdk.CfnOutput(this, 'KBCatalogTableArn', {
+      value: kbCatalogTable.tableArn,
+      description: 'DynamoDB table ARN for KB Catalog metadata',
+      exportName: `${projectName}-kb-catalog-table-arn`,
     })
   }
 }
