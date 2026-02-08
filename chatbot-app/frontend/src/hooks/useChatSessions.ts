@@ -26,7 +26,10 @@ export function useChatSessions({ sessionId, onNewChat }: UseChatSessionsProps) 
     setIsLoadingSessions(true);
     try {
       const data = await apiGet<{ success: boolean; sessions: ChatSession[] }>(
-        'session/list?limit=20&status=active'
+        'session/list?limit=20&status=active',
+        {
+          headers: sessionId ? { 'X-Session-ID': sessionId } : {},
+        }
       );
 
       if (data.success && data.sessions) {
@@ -37,7 +40,7 @@ export function useChatSessions({ sessionId, onNewChat }: UseChatSessionsProps) 
     } finally {
       setIsLoadingSessions(false);
     }
-  }, []);
+  }, [sessionId]);
 
   // Delete a session
   const deleteSession = useCallback(async (sessionIdToDelete: string) => {

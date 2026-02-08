@@ -130,7 +130,7 @@ if [ "$ENABLE_COGNITO" = "true" ]; then
     echo ""
     echo "👤 Creating test user..."
     TEST_USER_EMAIL="test@example.com"
-    TEST_USER_PASSWORD=$(LC_ALL=C tr -dc 'A-Za-z0-9!@#$%^&*' < /dev/urandom | head -c 12)
+    TEST_USER_PASSWORD=$(LC_ALL=C tr -dc 'A-Za-z0-9!@#$^&*' < /dev/urandom | head -c 12)
 
     # Check if test user already exists
     USER_EXISTS=$(aws cognito-idp list-users \
@@ -160,7 +160,7 @@ if [ "$ENABLE_COGNITO" = "true" ]; then
             --permanent \
             --region "$AWS_REGION" > /dev/null 2>&1
 
-        echo "✅ Test user created successfully!"
+        echo "✅ Test user created successfully! "
         echo ""
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo "🔑 Test User Credentials"
