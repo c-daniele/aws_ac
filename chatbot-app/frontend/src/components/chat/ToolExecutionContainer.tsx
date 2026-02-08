@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react'
+import React, { useState, useCallback, useMemo, useEffect, useRef, Component, type ErrorInfo, type ReactNode } from 'react'
 import { ChevronRight, Download, ChevronDown, ChevronUp, Sparkles } from 'lucide-react'
 import { ToolExecution } from '@/types/chat'
 import { getToolDisplayName } from '@/utils/chat'
@@ -34,6 +34,32 @@ interface ToolExecutionContainerProps {
   onOpenExcelArtifact?: (filename: string) => void  // Open Excel spreadsheet in Canvas
   onOpenPptArtifact?: (filename: string) => void  // Open PowerPoint presentation in Canvas
   onOpenExtractedDataArtifact?: (artifactId: string) => void  // Open extracted data in Canvas
+}
+
+// Error Boundary to catch rendering crashes inside tool results and prevent
+// the entire page from going blank (React error #185 / unhandled throw).
+interface ToolErrorBoundaryState { hasError: boolean; error?: Error }
+class ToolErrorBoundary extends Component<{ children: ReactNode; toolName?: string }, ToolErrorBoundaryState> {
+  constructor(props: { children: ReactNode; toolName?: string }) {
+    super(props)
+    this.state = { hasError: false }
+  }
+  static getDerivedStateFromError(error: Error): ToolErrorBoundaryState {
+    return { hasError: true, error }
+  }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error(`[ToolErrorBoundary] Caught error in tool "${this.props.toolName}":`, error, info)
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="p-2 text-sm text-red-600 bg-red-50 dark:bg-red-950/20 dark:text-red-400 rounded border border-red-200 dark:border-red-800">
+          Tool result failed to render.
+        </div>
+      )
+    }
+    return this.props.children
+  }
 }
 
 // Collapsible Markdown component for tool results
@@ -217,11 +243,9 @@ export const ToolExecutionContainer = React.memo<ToolExecutionContainerProps>(({
     return expandedTools.has(toolId)
   }
 
-  if (!toolExecutions || toolExecutions.length === 0) {
-    return null
-  }
-
   // Memoize parsed chart data
+  // Note: hooks must be called unconditionally (before any early return)
+  // to satisfy the Rules of Hooks — otherwise production builds crash with error #185.
   const toolExecutionsDeps = useMemo(() => {
     return toolExecutions.map(t => ({
       id: t.id,
@@ -302,6 +326,11 @@ export const ToolExecutionContainer = React.memo<ToolExecutionContainerProps>(({
       </div>
     );
   }, [chartDataCache]);
+
+  // Early return AFTER all hooks to satisfy Rules of Hooks
+  if (!toolExecutions || toolExecutions.length === 0) {
+    return null
+  }
 
   const handleFilesDownload = async (toolUseId: string, toolName?: string, toolResult?: string) => {
     try {
@@ -492,22 +521,24 @@ export const ToolExecutionContainer = React.memo<ToolExecutionContainerProps>(({
           const isExpanded = isToolExpanded(toolExecution.id)
           const displayName = getToolDisplayName(toolExecution.toolName, toolExecution.isComplete)
 
-          // Render visualization/map tools directly
+           // Render visualization/map tools directly
           if ((toolExecution.toolName === 'create_visualization' || toolExecution.toolName === 'show_on_map') &&
               toolExecution.toolResult &&
               toolExecution.isComplete) {
             const chartResult = renderVisualizationResult(toolExecution.id);
             if (chartResult) {
               return (
-                <div key={toolExecution.id} className="my-4">
-                  {chartResult}
-                </div>
+                <ToolErrorBoundary key={toolExecution.id} toolName={toolExecution.toolName}>
+                  <div className="my-4">
+                    {chartResult}
+                  </div>
+                </ToolErrorBoundary>
               );
             }
           }
 
           return (
-            <React.Fragment key={toolExecution.id}>
+            <ToolErrorBoundary key={toolExecution.id} toolName={toolExecution.toolName}>
               <div>
                 {/* Minimal header row */}
                 <div
@@ -807,7 +838,7 @@ export const ToolExecutionContainer = React.memo<ToolExecutionContainerProps>(({
                   </div>
                 )}
               </div>
-            </React.Fragment>
+            </ToolErrorBoundary>
           )
         })}
       </div>

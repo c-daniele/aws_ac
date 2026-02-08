@@ -67,6 +67,15 @@ export const useStreamEvents = ({
   const streamingIdRef = useRef<string | null>(null)
   const completeProcessedRef = useRef(false)
 
+  // Refs to avoid stale closures and unnecessary callback recreations.
+  // Reading sessionState / uiState directly inside useCallback deps causes
+  // every handler (and handleStreamEvent) to be recreated on every state change,
+  // which can cascade into "Maximum update depth exceeded" (error #185) in production.
+  const sessionStateRef = useRef(sessionState)
+  sessionStateRef.current = sessionState
+  const uiStateRef = useRef(uiState)
+  uiStateRef.current = uiState
+
   // Swarm mode state
   const swarmModeRef = useRef<{
     isActive: boolean
@@ -94,16 +103,15 @@ export const useStreamEvents = ({
             reasoningText: (currentStep.reasoningText || '') + data.text
           }
           swarmModeRef.current.agentSteps[stepIndex] = updatedStep
-          // Use flushSync to force immediate render for real-time progress
-          flushSync(() => {
-            setSessionState(prev => ({
-              ...prev,
-              swarmProgress: prev.swarmProgress ? {
-                ...prev.swarmProgress,
-                agentSteps: [...swarmModeRef.current.agentSteps]
-              } : prev.swarmProgress
-            }))
-          })
+          // Avoid flushSync here — it is called on every reasoning token and
+          // can trigger "Maximum update depth exceeded" (error #185) in production.
+          setSessionState(prev => ({
+            ...prev,
+            swarmProgress: prev.swarmProgress ? {
+              ...prev.swarmProgress,
+              agentSteps: [...swarmModeRef.current.agentSteps]
+            } : prev.swarmProgress
+          }))
         }
         return
       }
@@ -131,16 +139,15 @@ export const useStreamEvents = ({
               responseText: (currentStep.responseText || '') + data.text
             }
             swarmModeRef.current.agentSteps[stepIndex] = updatedStep
-            // Use flushSync to force immediate render for real-time streaming
-            flushSync(() => {
-              setSessionState(prev => ({
-                ...prev,
-                swarmProgress: prev.swarmProgress ? {
-                  ...prev.swarmProgress,
-                  agentSteps: [...swarmModeRef.current.agentSteps]
-                } : prev.swarmProgress
-              }))
-            })
+            // Avoid flushSync here — it is called on every response token and
+            // can trigger "Maximum update depth exceeded" (error #185) in production.
+            setSessionState(prev => ({
+              ...prev,
+              swarmProgress: prev.swarmProgress ? {
+                ...prev.swarmProgress,
+                agentSteps: [...swarmModeRef.current.agentSteps]
+              } : prev.swarmProgress
+            }))
           }
           return // Non-responder: only update SwarmProgress, no chat message
         }
@@ -149,7 +156,7 @@ export const useStreamEvents = ({
       }
 
       // Finalize reasoning step if active
-      if (sessionState.reasoning?.isActive) {
+      if (sessionStateRef.current.reasoning?.isActive) {
         setSessionState(prev => ({
           ...prev,
           reasoning: prev.reasoning ? { ...prev.reasoning, isActive: false } : null
@@ -223,7 +230,7 @@ export const useStreamEvents = ({
         textBuffer.appendChunk(data.text)
       }
     }
-  }, [sessionState, setSessionState, setMessages, setUIState, streamingStartedRef, streamingIdRef, metadataTracking, textBuffer])
+  }, [setSessionState, setMessages, setUIState, streamingStartedRef, streamingIdRef, metadataTracking, textBuffer])
 
   const handleToolUseEvent = useCallback((data: StreamEvent) => {
     if (data.type === 'tool_use') {
@@ -277,7 +284,7 @@ export const useStreamEvents = ({
 
       // Finalize current streaming message before adding tool
       if (streamingStartedRef.current && streamingIdRef.current) {
-        const ttft = uiState.latencyMetrics.timeToFirstToken
+        const ttft = uiStateRef.current.latencyMetrics.timeToFirstToken
         setMessages(prevMsgs => prevMsgs.map(msg => {
           if (msg.id === streamingIdRef.current) {
             return {
@@ -363,7 +370,7 @@ export const useStreamEvents = ({
         }])
       }
     }
-  }, [availableTools, currentToolExecutionsRef, currentTurnIdRef, setSessionState, setMessages, setUIState, uiState, textBuffer])
+  }, [availableTools, currentToolExecutionsRef, currentTurnIdRef, setSessionState, setMessages, setUIState, textBuffer])
 
   const handleToolResultEvent = useCallback((data: StreamEvent) => {
     if (data.type === 'tool_result') {
@@ -512,7 +519,7 @@ export const useStreamEvents = ({
       // Extract browser session info from metadata (for Live View)
       // Only set on first browser tool use to prevent unnecessary DCV reconnections
       const browserSessionUpdate: any = {}
-      if (!sessionState.browserSession && data.metadata?.browserSessionId) {
+      if (!sessionStateRef.current.browserSession && data.metadata?.browserSessionId) {
         const browserSession = {
           sessionId: data.metadata.browserSessionId,
           browserId: data.metadata.browserId || null
@@ -578,7 +585,7 @@ export const useStreamEvents = ({
         return msg
       }))
     }
-  }, [currentToolExecutionsRef, sessionState, setSessionState, setMessages, setUIState])
+  }, [currentToolExecutionsRef, setSessionState, setMessages, setUIState])
 
   const handleCompleteEvent = useCallback(async (data: StreamEvent) => {
     if (data.type === 'complete') {
@@ -959,7 +966,7 @@ export const useStreamEvents = ({
         swarmModeRef.current = { isActive: false, nodeHistory: [], agentSteps: [] }
       }
     }
-  }, [uiState, setMessages, setUIState, setSessionState, streamingStartedRef, streamingIdRef, completeProcessedRef, metadataTracking, textBuffer])
+  }, [setMessages, setUIState, setSessionState, streamingStartedRef, streamingIdRef, completeProcessedRef, metadataTracking, textBuffer])
 
   const handleInterruptEvent = useCallback((data: StreamEvent) => {
     if (data.type === 'interrupt') {
@@ -1315,15 +1322,15 @@ export const useStreamEvents = ({
           responseText: (currentStep.responseText || '') + data.content
         }
         swarmModeRef.current.agentSteps[stepIndex] = updatedStep
-        flushSync(() => {
-          setSessionState(prev => ({
-            ...prev,
-            swarmProgress: prev.swarmProgress ? {
-              ...prev.swarmProgress,
-              agentSteps: [...swarmModeRef.current.agentSteps]
-            } : prev.swarmProgress
-          }))
-        })
+        // Avoid flushSync here — it is called on every text token and
+        // can trigger "Maximum update depth exceeded" (error #185) in production.
+        setSessionState(prev => ({
+          ...prev,
+          swarmProgress: prev.swarmProgress ? {
+            ...prev.swarmProgress,
+            agentSteps: [...swarmModeRef.current.agentSteps]
+          } : prev.swarmProgress
+        }))
       }
       // If not in swarm mode or no agentSteps, ignore text events
       // (they shouldn't occur outside swarm mode anyway)

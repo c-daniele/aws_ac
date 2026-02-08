@@ -93,131 +93,8 @@ export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, current
     }
   }
 
-  if (!messages || messages.length === 0) {
-    return null
-  }
-
-  // Get turn ID from first message for feedback storage
-  const turnId = messages[0]?.id
-
-  // Handle copy to clipboard
-  const handleCopy = async () => {
-    try {
-      // Collect all text content from messages
-      const allText = messages
-        .filter(msg => msg.text)
-        .map(msg => msg.text)
-        .join('\n\n')
-
-      await navigator.clipboard.writeText(allText)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch (err) {
-      console.error('Failed to copy:', err)
-    }
-  }
-
-  // Handle feedback (thumbs up/down)
-  const handleFeedback = async (type: 'up' | 'down') => {
-    const newFeedback = feedback === type ? null : type
-    setFeedback(newFeedback)
-
-    // Save feedback to metadata
-    if (sessionId && turnId) {
-      try {
-        // Get auth token
-        const authHeaders: Record<string, string> = { 'Content-Type': 'application/json' }
-        try {
-          const session = await fetchAuthSession()
-          const token = session.tokens?.idToken?.toString()
-          if (token) {
-            authHeaders['Authorization'] = `Bearer ${token}`
-          }
-        } catch (error) {
-          console.log('[AssistantTurn] No auth session available')
-        }
-
-        await fetch('/api/session/update-metadata', {
-          method: 'POST',
-          headers: authHeaders,
-          body: JSON.stringify({
-            sessionId,
-            messageId: turnId,
-            metadata: {
-              feedback: newFeedback
-            }
-          })
-        })
-      } catch (err) {
-        console.error('Failed to save feedback:', err)
-      }
-    }
-  }
-
-  // Handle document download
-  const handleDocumentDownload = async (filename: string, toolType: string) => {
-    if (!sessionId) {
-      console.error('No session ID available for document download')
-      return
-    }
-
-    try {
-      // Get auth token for BFF to extract userId
-      const authHeaders: Record<string, string> = { 'Content-Type': 'application/json' }
-      try {
-        const session = await fetchAuthSession()
-        const token = session.tokens?.idToken?.toString()
-        if (token) {
-          authHeaders['Authorization'] = `Bearer ${token}`
-        }
-      } catch (error) {
-        console.log('[DocumentDownload] No auth session available')
-      }
-
-      // Step 1: Get S3 key from documents/download API
-      // BFF extracts userId from Authorization header
-      const s3KeyResponse = await fetch('/api/documents/download', {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify({
-          sessionId,
-          filename,
-          toolType
-        })
-      })
-
-      if (!s3KeyResponse.ok) {
-        throw new Error(`Failed to get S3 key: ${s3KeyResponse.status}`)
-      }
-
-      const { s3Key } = await s3KeyResponse.json()
-
-      // Step 2: Get presigned URL from existing presigned-url API
-      const presignedResponse = await fetch('/api/s3/presigned-url', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ s3Key })
-      })
-
-      if (!presignedResponse.ok) {
-        throw new Error(`Failed to get presigned URL: ${presignedResponse.status}`)
-      }
-
-      const { url } = await presignedResponse.json()
-
-      // Step 3: Trigger download
-      const link = document.createElement('a')
-      link.href = url
-      link.download = filename
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-
-      console.log('[DocumentDownload] Download triggered:', filename)
-    } catch (err) {
-      console.error('Failed to download document:', err)
-    }
-  }
+  // Note: do not add early returns before hooks — they must be called unconditionally
+  // to satisfy the Rules of Hooks. Otherwise production builds crash with error #185.
 
   // Sort messages by timestamp to maintain chronological order
   // All messages have timestamp set on creation, so no fallback needed
@@ -356,6 +233,133 @@ export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, current
     })
     return docs
   }, [sortedMessages])
+
+  // Early return AFTER all hooks to satisfy Rules of Hooks
+  if (!messages || messages.length === 0) {
+    return null
+  }
+
+  // Get turn ID from first message for feedback storage
+  const turnId = messages[0]?.id
+
+  // Handle copy to clipboard
+  const handleCopy = async () => {
+    try {
+      // Collect all text content from messages
+      const allText = messages
+        .filter(msg => msg.text)
+        .map(msg => msg.text)
+        .join('\n\n')
+
+      await navigator.clipboard.writeText(allText)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch (err) {
+      console.error('Failed to copy:', err)
+    }
+  }
+
+  // Handle feedback (thumbs up/down)
+  const handleFeedback = async (type: 'up' | 'down') => {
+    const newFeedback = feedback === type ? null : type
+    setFeedback(newFeedback)
+
+    // Save feedback to metadata
+    if (sessionId && turnId) {
+      try {
+        // Get auth token
+        const authHeaders: Record<string, string> = { 'Content-Type': 'application/json' }
+        try {
+          const session = await fetchAuthSession()
+          const token = session.tokens?.idToken?.toString()
+          if (token) {
+            authHeaders['Authorization'] = `Bearer ${token}`
+          }
+        } catch (error) {
+          console.log('[AssistantTurn] No auth session available')
+        }
+
+        await fetch('/api/session/update-metadata', {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({
+            sessionId,
+            messageId: turnId,
+            metadata: {
+              feedback: newFeedback
+            }
+          })
+        })
+      } catch (err) {
+        console.error('Failed to save feedback:', err)
+      }
+    }
+  }
+
+  // Handle document download
+  const handleDocumentDownload = async (filename: string, toolType: string) => {
+    if (!sessionId) {
+      console.error('No session ID available for document download')
+      return
+    }
+
+    try {
+      // Get auth token for BFF to extract userId
+      const authHeaders: Record<string, string> = { 'Content-Type': 'application/json' }
+      try {
+        const session = await fetchAuthSession()
+        const token = session.tokens?.idToken?.toString()
+        if (token) {
+          authHeaders['Authorization'] = `Bearer ${token}`
+        }
+      } catch (error) {
+        console.log('[DocumentDownload] No auth session available')
+      }
+
+      // Step 1: Get S3 key from documents/download API
+      // BFF extracts userId from Authorization header
+      const s3KeyResponse = await fetch('/api/documents/download', {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({
+          sessionId,
+          filename,
+          toolType
+        })
+      })
+
+      if (!s3KeyResponse.ok) {
+        throw new Error(`Failed to get S3 key: ${s3KeyResponse.status}`)
+      }
+
+      const { s3Key } = await s3KeyResponse.json()
+
+      // Step 2: Get presigned URL from existing presigned-url API
+      const presignedResponse = await fetch('/api/s3/presigned-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ s3Key })
+      })
+
+      if (!presignedResponse.ok) {
+        throw new Error(`Failed to get presigned URL: ${presignedResponse.status}`)
+      }
+
+      const { url } = await presignedResponse.json()
+
+      // Step 3: Trigger download
+      const link = document.createElement('a')
+      link.href = url
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+
+      console.log('[DocumentDownload] Download triggered:', filename)
+    } catch (err) {
+      console.error('Failed to download document:', err)
+    }
+  }
 
   return (
     <div className="flex justify-start mb-8 group">
