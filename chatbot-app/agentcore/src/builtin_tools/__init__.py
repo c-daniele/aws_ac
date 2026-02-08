@@ -116,7 +116,6 @@ __all__ = [
     'download_from_catalog',
     'delete_catalog'
 ]
-]
 
 # Collection of all builtin tools for registry sync
 BUILTIN_TOOLS = [

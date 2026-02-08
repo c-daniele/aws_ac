@@ -67,13 +67,6 @@ export const useStreamEvents = ({
   const streamingIdRef = useRef<string | null>(null)
   const completeProcessedRef = useRef(false)
 
-  // Ref to track sessionState without causing circular dependency in useCallback
-  // This breaks the infinite loop where setSessionState -> sessionState change -> callback recreation
-  const sessionStateRef = useRef(sessionState)
-  useEffect(() => {
-    sessionStateRef.current = sessionState
-  }, [sessionState])
-
   // Swarm mode state
   const swarmModeRef = useRef<{
     isActive: boolean
@@ -156,7 +149,7 @@ export const useStreamEvents = ({
       }
 
       // Finalize reasoning step if active
-      if (sessionStateRef.current.reasoning?.isActive) {
+      if (sessionState.reasoning?.isActive) {
         setSessionState(prev => ({
           ...prev,
           reasoning: prev.reasoning ? { ...prev.reasoning, isActive: false } : null
@@ -230,7 +223,7 @@ export const useStreamEvents = ({
         textBuffer.appendChunk(data.text)
       }
     }
-  }, [setSessionState, setMessages, setUIState, metadataTracking, textBuffer])
+  }, [sessionState, setSessionState, setMessages, setUIState, streamingStartedRef, streamingIdRef, metadataTracking, textBuffer])
 
   const handleToolUseEvent = useCallback((data: StreamEvent) => {
     if (data.type === 'tool_use') {
@@ -379,6 +372,55 @@ export const useStreamEvents = ({
       const toolName = toolExecution?.toolName
       const isCancelled = data.status === 'error'
 
+      // Check for OAuth authorization required in tool result
+      if (data.result) {
+        try {
+          const resultJson = JSON.parse(data.result)
+          if (resultJson.oauth_required === true && resultJson.auth_url) {
+            // Extract service name from message or use default
+            const serviceName = resultJson.message?.match(/^(\w+)\s+authorization/i)?.[1] || 'Service'
+
+            console.log(`[OAuth] Authorization required for ${serviceName}:`, resultJson.auth_url)
+
+            // Set pending OAuth state - this will trigger UI to show OAuth prompt
+            setSessionState(prev => ({
+              ...prev,
+              pendingOAuth: {
+                toolUseId: data.toolUseId,
+                toolName: toolName || 'unknown',
+                authUrl: resultJson.auth_url,
+                serviceName,
+                popupOpened: false
+              }
+            }))
+
+            // Auto-open OAuth popup
+            const popup = window.open(
+              resultJson.auth_url,
+              'oauth_popup',
+              'width=500,height=700,scrollbars=yes,resizable=yes'
+            )
+
+            if (popup) {
+              popup.focus()
+              // Mark popup as opened
+              setSessionState(prev => ({
+                ...prev,
+                pendingOAuth: prev.pendingOAuth ? {
+                  ...prev.pendingOAuth,
+                  popupOpened: true
+                } : null
+              }))
+            }
+
+            // Don't process further - wait for OAuth completion
+            return
+          }
+        } catch {
+          // Not JSON or doesn't have oauth_required - continue normal processing
+        }
+      }
+
       // Track tool completion in swarm mode for expanded view
       if (swarmModeRef.current.isActive && swarmModeRef.current.agentSteps.length > 0) {
         const stepIndex = swarmModeRef.current.agentSteps.length - 1
@@ -470,7 +512,7 @@ export const useStreamEvents = ({
       // Extract browser session info from metadata (for Live View)
       // Only set on first browser tool use to prevent unnecessary DCV reconnections
       const browserSessionUpdate: any = {}
-      if (!sessionStateRef.current.browserSession && data.metadata?.browserSessionId) {
+      if (!sessionState.browserSession && data.metadata?.browserSessionId) {
         const browserSession = {
           sessionId: data.metadata.browserSessionId,
           browserId: data.metadata.browserId || null
@@ -536,7 +578,7 @@ export const useStreamEvents = ({
         return msg
       }))
     }
-  }, [currentToolExecutionsRef, setSessionState, setMessages, setUIState, onArtifactUpdated])
+  }, [currentToolExecutionsRef, sessionState, setSessionState, setMessages, setUIState])
 
   const handleCompleteEvent = useCallback(async (data: StreamEvent) => {
     if (data.type === 'complete') {
@@ -582,7 +624,8 @@ export const useStreamEvents = ({
             browserSession: prev.browserSession,
             browserProgress: undefined,
             researchProgress: undefined,
-            interrupt: null
+            interrupt: null,
+            pendingOAuth: prev.pendingOAuth  // Preserve pending OAuth on stop
           }))
         })
 
@@ -840,7 +883,8 @@ export const useStreamEvents = ({
         browserProgress: undefined,
         researchProgress: undefined,
         interrupt: null,
-        swarmProgress: prev.swarmProgress  // Preserve swarm progress for expanded view
+        swarmProgress: prev.swarmProgress,  // Preserve swarm progress for expanded view
+        pendingOAuth: prev.pendingOAuth  // Preserve pending OAuth until completion callback
       }))
 
       streamingStartedRef.current = false
@@ -899,7 +943,8 @@ export const useStreamEvents = ({
         browserProgress: undefined,  // Clear browser progress on error
         researchProgress: undefined,  // Clear research progress on error
         interrupt: null,
-        swarmProgress: undefined  // Clear swarm progress on error
+        swarmProgress: undefined,  // Clear swarm progress on error
+        pendingOAuth: prev.pendingOAuth  // Preserve pending OAuth on error
       }))
 
       // Reset refs on error
@@ -914,7 +959,7 @@ export const useStreamEvents = ({
         swarmModeRef.current = { isActive: false, nodeHistory: [], agentSteps: [] }
       }
     }
-  }, [setMessages, setUIState, setSessionState, metadataTracking, textBuffer])
+  }, [uiState, setMessages, setUIState, setSessionState, streamingStartedRef, streamingIdRef, completeProcessedRef, metadataTracking, textBuffer])
 
   const handleInterruptEvent = useCallback((data: StreamEvent) => {
     if (data.type === 'interrupt') {

@@ -314,6 +314,7 @@ export class ChatbotStack extends cdk.Stack {
               '--build-arg NEXT_PUBLIC_STREAMING_API_URL=$ALB_DNS ' +
               '--build-arg NEXT_PUBLIC_GOOGLE_MAPS_EMBED_API_KEY=$GOOGLE_MAPS_API_KEY ' +
               '--build-arg NEXT_PUBLIC_DEFAULT_KEYS=$DEFAULT_KEYS ' +
+              '--build-arg NEXT_PUBLIC_APP_VERSION=$APP_VERSION ' +
               '-t frontend:latest .',
               `docker tag frontend:latest ${frontendRepository.repositoryUri}:latest`,
             ],
