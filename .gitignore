@@ -178,3 +178,6 @@ browser-use
 **/pytest_cache/
 
 results
+.specify*
+AGENTS.md
+scripts/sessions.txt
